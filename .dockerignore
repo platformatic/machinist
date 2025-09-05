@@ -1,0 +1,6 @@
+coverage/
+.env*
+node_modules/
+.git
+.github
+renovate.json
