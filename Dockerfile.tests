@@ -1,0 +1,7 @@
+FROM nginx:alpine
+
+RUN echo 'server { listen 8080; location / { return 200 "$request_method $uri HTTP/$server_protocol\r\n$request_body"; add_header Content-Type text/plain; } }' > /etc/nginx/conf.d/echo.conf
+
+EXPOSE 8080
+
+CMD ["nginx", "-g", "daemon off;"]

@@ -1,0 +1,8 @@
+coverage/
+.env
+node_modules/
+.pnpm-store/
+.vscode
+
+# K8s dev environment
+.backup-env
