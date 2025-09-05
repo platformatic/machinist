@@ -12,7 +12,7 @@
     "dev": "wattpm dev"
   },
   "dependencies": {
-    "platformatic": "^2.61.0",
+    "platformatic": "^3.0.0",
     "wattpm": "^2.61.0"
   },
   "devDependencies": {
