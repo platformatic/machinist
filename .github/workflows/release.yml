@@ -96,7 +96,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.REPOSITORY_NAME }}:latest,${{ env.REPOSITORY_NAME }}:v${{ inputs.version }}
+            platformatic/${{ env.REPOSITORY_NAME }}:latest,platformatic/${{ env.REPOSITORY_NAME }}:v${{ inputs.version }}
           build-args: |
             COMMIT_HASH=${{ github.sha }}
             BUILD_TIME=${{ github.event.repository.updated_at }}
