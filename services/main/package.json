@@ -21,7 +21,7 @@
     "@fastify/deepmerge": "^2.0.0",
     "@fastify/error": "^4.0.0",
     "@fastify/sensible": "^6.0.1",
-    "@platformatic/service": "^2.23.0",
+    "@platformatic/service": "^3.0.0",
     "ajv": "^8.17.1",
     "async-cache-dedupe": "^2.2.0",
     "fast-querystring": "^1.1.2",
