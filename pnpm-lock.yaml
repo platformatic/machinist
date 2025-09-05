@@ -28,8 +28,8 @@ importers:
         specifier: ^6.0.2
         version: 6.3.1
       '@fastify/deepmerge':
-        specifier: ^2.0.0
-        version: 2.0.2
+        specifier: ^3.0.0
+        version: 3.1.0
       '@fastify/error':
         specifier: ^4.0.0
         version: 4.2.0
@@ -144,6 +144,9 @@ packages:
 
   '@fastify/deepmerge@2.0.2':
     resolution: {integrity: sha512-3wuLdX5iiiYeZWP6bQrjqhrcvBIf0NHbQH1Ur1WbHvoiuTYUEItgygea3zs8aHpiitn0lOB8gX20u1qO+FDm7Q==}
+
+  '@fastify/deepmerge@3.1.0':
+    resolution: {integrity: sha512-lCVONBQINyNhM6LLezB6+2afusgEYR4G8xenMsfe+AT+iZ7Ca6upM5Ha8UkZuYSnuMw3GWl/BiPXnLMi/gSxuQ==}
 
   '@fastify/error@4.2.0':
     resolution: {integrity: sha512-RSo3sVDXfHskiBZKBPRgnQTtIqpi/7zhJOEmAxCiBcM7d0uwdGdxLlsCaLzGs8v8NnxIRlfG0N51p5yFaOentQ==}
@@ -2839,6 +2842,8 @@ snapshots:
       mnemonist: 0.40.0
 
   '@fastify/deepmerge@2.0.2': {}
+
+  '@fastify/deepmerge@3.1.0': {}
 
   '@fastify/error@4.2.0': {}
 
