@@ -28,7 +28,7 @@
     "fastify-plugin": "^5.0.1",
     "platformatic": "^2.23.0",
     "split2": "^4.2.0",
-    "undici": "^6.21.0",
+    "undici": "^7.0.0",
     "pluralize": "^8.0.0"
   },
   "devDependencies": {
