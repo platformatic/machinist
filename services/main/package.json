@@ -1,0 +1,42 @@
+{
+  "name": "machinist",
+  "version": "2.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "PLT_DEV_MODE=true pnpm run start",
+    "lint": "standard | snazzy",
+    "lint:fix": "standard --fix",
+    "start": "platformatic service start",
+    "test": "pnpm test:setup && pnpm test:unit && pnpm test:teardown",
+    "test:unit": "borp --concurrency=1 tests/*.test.js",
+    "test:setup": "k3d registry create machinist-test --port=5050 --image=ligfx/k3d-registry-dockerd:v0.6 --volume=/var/run/docker.sock:/var/run/docker.sock --proxy-remote-url=* && k3d cluster create plt-machinist-test --registry-use=k3d-machinist-test:40035 --registry-config=k3d-registry.yaml",
+    "test:teardown": "k3d cluster rm plt-machinist-test && k3d registry rm k3d-machinist-test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@fastify/autoload": "^6.0.2",
+    "@fastify/deepmerge": "^2.0.0",
+    "@fastify/error": "^4.0.0",
+    "@fastify/sensible": "^6.0.1",
+    "@platformatic/service": "^2.23.0",
+    "ajv": "^8.17.1",
+    "async-cache-dedupe": "^2.2.0",
+    "fast-querystring": "^1.1.2",
+    "fastify-plugin": "^5.0.1",
+    "platformatic": "^2.23.0",
+    "split2": "^4.2.0",
+    "undici": "^6.21.0",
+    "pluralize": "^8.0.0"
+  },
+  "devDependencies": {
+    "borp": "^0.18.0",
+    "fastify": "^5.1.0",
+    "snazzy": "^9.0.0",
+    "standard": "^17.1.2",
+    "yaml": "^2.8.1"
+  },
+  "packageManager": "pnpm@9.11.0"
+}
