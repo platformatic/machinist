@@ -1,4 +1,4 @@
-FROM node:22.13.1-alpine
+FROM node:22.19.0-alpine
 
 ARG COMMIT_HASH
 ARG BUILD_TIME
