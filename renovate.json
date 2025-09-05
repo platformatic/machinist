@@ -1,0 +1,15 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:base"
+  ],
+  "rangeStrategy": "update-lockfile",
+  "prHourlyLimit": 10,
+  "packageRules": [
+    {
+      "groupName": "Safe automerge",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"]
+    }
+  ],
+  "lockFileMaintenance": { "enabled": true }
+}

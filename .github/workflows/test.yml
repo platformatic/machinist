@@ -1,0 +1,38 @@
+name: Run tests
+on: [pull_request, workflow_call]
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: pnpm/action-setup@v4.0.0
+      with:
+        version: 9
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: pnpm install
+      uses: nick-fields/retry@v3.0.0
+      with:
+        max_attempts: 10
+        timeout_minutes: 5
+        retry_on: error
+        command: pnpm install
+
+    - name: Create cluster
+      uses: AbsaOSS/k3d-action@v2
+      with:
+        cluster-name: plt-machinist-test
+
+    - name: Build and import test image
+      run: |
+        docker build . -t platformatic/machinist-test:latest -f Dockerfile.tests
+        k3d image import platformatic/machinist-test:latest -c plt-machinist-test --verbose
+
+    - name: Run test suite
+      run: pnpm test:unit
