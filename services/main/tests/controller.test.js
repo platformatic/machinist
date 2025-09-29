@@ -16,7 +16,7 @@ after(async () => {
   await removeYaml(deploymentFixture)
 })
 
-test('get all controllers in a namespace', async t => {
+test('get all controllers in a namespace', { only: true }, async t => {
   const { app } = await bootstrap(t)
 
   const result = await app.inject({

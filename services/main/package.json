@@ -9,7 +9,7 @@
     "lint:fix": "standard --fix",
     "start": "platformatic service start",
     "test": "pnpm test:setup && pnpm test:unit && pnpm test:teardown",
-    "test:unit": "borp --concurrency=1 tests/*.test.js",
+    "test:unit": "borp --only --concurrency=1 tests/*.test.js",
     "test:setup": "k3d registry create machinist-test --port=5050 --image=ligfx/k3d-registry-dockerd:v0.6 --volume=/var/run/docker.sock:/var/run/docker.sock --proxy-remote-url=* && k3d cluster create plt-machinist-test --registry-use=k3d-machinist-test:40035 --registry-config=k3d-registry.yaml",
     "test:teardown": "k3d cluster rm plt-machinist-test && k3d registry rm k3d-machinist-test"
   },
