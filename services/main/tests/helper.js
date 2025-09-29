@@ -42,7 +42,7 @@ function config (options) {
     server: {
       hostname: '127.0.0.1',
       port: 0,
-      logger: { level: 'debug' }
+      logger: { level: 'silent' }
     },
     plugins: {
       paths: [

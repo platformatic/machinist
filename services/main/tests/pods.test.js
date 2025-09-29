@@ -1,6 +1,6 @@
 'use strict'
 
-const { test, before, after } = require('node:test')
+const { test, before } = require('node:test')
 const assert = require('node:assert/strict')
 const { join } = require('node:path')
 const { bootstrap, applyYaml, removeYaml, getPods } = require('./helper')
@@ -8,16 +8,12 @@ const { bootstrap, applyYaml, removeYaml, getPods } = require('./helper')
 const deploymentFixture = join(__dirname, 'fixtures', 'pods', 'deployment.yaml')
 
 before(async () => {
-  await applyYaml(deploymentFixture)
-})
-
-after(async () => {
-  await removeYaml(deploymentFixture)
+    await applyYaml(deploymentFixture)
 })
 
 test('get pod', async t => {
   const { app } = await bootstrap(t)
-  const { items } = await getPods({ 'app.kubernetes.io/instance': 'deployment-fixture' })
+  const { items } = await getPods({ 'app.kubernetes.io/instance': 'deployment-fixture-pods' })
   const podName = items[0].metadata.name
 
   const result = await app.inject({
@@ -41,7 +37,7 @@ test('get pod', async t => {
 
 test('set pod labels', async t => {
   const { app } = await bootstrap(t)
-  const { items } = await getPods({ 'app.kubernetes.io/instance': 'deployment-fixture' })
+  const { items } = await getPods({ 'app.kubernetes.io/instance': 'deployment-fixture-pods' })
   const podName = items[0].metadata.name
 
   const result = await app.inject({
