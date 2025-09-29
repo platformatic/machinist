@@ -1,21 +1,18 @@
 'use strict'
 
 const { join } = require('node:path')
-const { test, before, after } = require('node:test')
+const { test, before } = require('node:test')
 const assert = require('node:assert/strict')
+const { setTimeout } = require('node:timers/promises')
 const { applyYaml, bootstrap, removeYaml, getPods } = require('./helper')
 
-const deploymentFixture = join(__dirname, 'fixtures', 'deployment.yaml')
+const deploymentFixture = join(__dirname, 'fixtures', 'controller', 'deployment.yaml')
 
 before(async () => {
   await applyYaml(deploymentFixture)
 })
 
-after(async () => {
-  await removeYaml(deploymentFixture)
-})
-
-test('get all controllers in a namespace', async t => {
+test('get all controllers in a namespace', { only: true }, async t => {
   const { app } = await bootstrap(t)
 
   const result = await app.inject({
@@ -26,9 +23,10 @@ test('get all controllers in a namespace', async t => {
 
   assert.strictEqual(result.statusCode, 200, result.json())
 
-  const [controller] = result.json().controllers
+  // Only look for the controller(s) in the fixture
+  const controller = result.json().controllers
+    .find(c => c.name === 'nginx-echo-server-deployment-controller')
   assert.strictEqual(controller.kind, 'Deployment')
-  assert.strictEqual(controller.name, 'nginx-echo-server-deployment')
   assert(controller.pods.length >= controller.replicas)
 })
 

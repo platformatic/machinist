@@ -1,18 +1,14 @@
 'use strict'
 
-const { test, before, after } = require('node:test')
+const { test, before } = require('node:test')
 const assert = require('node:assert/strict')
 const { join } = require('node:path')
 const { bootstrap, applyYaml, removeYaml, getPods } = require('./helper')
 
-const deploymentFixture = join(__dirname, 'fixtures', 'deployment.yaml')
+const deploymentFixture = join(__dirname, 'fixtures', 'state', 'deployment.yaml')
 
 before(async () => {
   await applyYaml(deploymentFixture)
-})
-
-after(async () => {
-  await removeYaml(deploymentFixture)
 })
 
 test('get state of namespace', async t => {

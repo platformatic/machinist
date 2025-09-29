@@ -1,14 +1,14 @@
 'use strict'
 
 const { join } = require('node:path')
-const { test, before, after } = require('node:test')
+const { test, before } = require('node:test')
 const assert = require('node:assert/strict')
 const { applyYaml, bootstrap, removeYaml } = require('./helper')
 
-const deploymentFixture = join(__dirname, 'fixtures', 'deployment.yaml')
-const replicaSetFixture = join(__dirname, 'fixtures', 'replica-set.yaml')
-const replicationControllerFixture = join(__dirname, 'fixtures', 'replication-controller.yaml')
-const statefulSetFixture = join(__dirname, 'fixtures', 'stateful-set.yaml')
+const deploymentFixture = join(__dirname, 'fixtures', 'controller-updates', 'deployment.yaml')
+const replicaSetFixture = join(__dirname, 'fixtures', 'controller-updates', 'replica-set.yaml')
+const replicationControllerFixture = join(__dirname, 'fixtures', 'controller-updates', 'replication-controller.yaml')
+const statefulSetFixture = join(__dirname, 'fixtures', 'controller-updates', 'stateful-set.yaml')
 
 before(async () => {
   await Promise.allSettled([
@@ -19,15 +19,6 @@ before(async () => {
   ])
 })
 
-after(async () => {
-  await Promise.allSettled([
-    removeYaml(deploymentFixture),
-    removeYaml(replicaSetFixture),
-    removeYaml(replicationControllerFixture),
-    removeYaml(statefulSetFixture)
-  ])
-})
-
 test('update replica count for controller', async t => {
   const { app } = await bootstrap(t)
 
@@ -35,7 +26,7 @@ test('update replica count for controller', async t => {
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-deployment?apiVersion=apps%2Fv1&kind=Deployment',
+      url: '/controllers/default/nginx-echo-server-deployment-controller-updates?apiVersion=apps%2Fv1&kind=Deployment',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ replicaCount: 7 })
     })
@@ -48,7 +39,7 @@ test('update replica count for controller', async t => {
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-replicaset?apiVersion=apps%2Fv1&kind=ReplicaSet',
+      url: '/controllers/default/nginx-echo-server-replicaset-controller-updates?apiVersion=apps%2Fv1&kind=ReplicaSet',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ replicaCount: 7 })
     })
@@ -61,7 +52,7 @@ test('update replica count for controller', async t => {
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-replicationcontroller?apiVersion=v1&kind=ReplicationController',
+      url: '/controllers/default/nginx-echo-server-replicationcontroller-controller-updates?apiVersion=v1&kind=ReplicationController',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ replicaCount: 7 })
     })
@@ -74,7 +65,7 @@ test('update replica count for controller', async t => {
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-statefulset?apiVersion=apps%2Fv1&kind=StatefulSet',
+      url: '/controllers/default/nginx-echo-server-statefulset-controller-updates?apiVersion=apps%2Fv1&kind=StatefulSet',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ replicaCount: 7 })
     })

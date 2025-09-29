@@ -65,15 +65,15 @@ class K8s {
     return output
   }
 
-  async getPods (namespace, labels) {
+  async getPods (namespace, labels = {}) {
     const labelSelector = querystring.stringify(labels)
     const endpoint = `/api/v1/namespaces/${namespace}/pods?labelSelector=${labelSelector}`
     const { items } = await this.apiClient.request(endpoint)
 
     return (await Promise.all(items
       .map(async pod => {
-        this.log.debug({ pod }, 'getPods')
         const owner = pod.metadata?.ownerReferences?.find(ref => ref.controller)
+        this.log.debug({ pod, owner }, 'getPods')
         if (owner) {
           pod.controller = await this.getController(
             namespace,
@@ -162,6 +162,7 @@ class K8s {
   async getController (namespace, name, apiVersion, kind) {
     this.log.debug({ namespace, name, apiVersion, kind }, 'Getting controlller')
     const controllerPath = this.#createControllerPath(namespace, name, apiVersion, kind)
+    this.log.debug({ controllerPath })
     const controller = await this.apiClient.request(controllerPath)
 
     // Add in the controller name to have a similar schema across ownerRef and
@@ -177,12 +178,17 @@ class K8s {
     const parentController = owners.find(owner => owner.controller)
     this.log.debug({ parentController, owners, controller }, 'Preparing to search for parent')
     if (parentController) {
-      return this.getController(
-        namespace,
-        parentController.name,
-        parentController.apiVersion,
-        parentController.kind
-      )
+      try {
+        return this.getController(
+          namespace,
+          parentController.name,
+          parentController.apiVersion,
+          parentController.kind
+        )
+      } catch (err) {
+        this.log.warn({ err }, 'Unable to get parent controller')
+        return controller
+      }
     }
 
     return controller
