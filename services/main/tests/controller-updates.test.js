@@ -11,6 +11,7 @@ const replicationControllerFixture = join(__dirname, 'fixtures', 'replication-co
 const statefulSetFixture = join(__dirname, 'fixtures', 'stateful-set.yaml')
 
 before(async () => {
+  console.log('RUNNING BEFORE')
   await Promise.allSettled([
     applyYaml(deploymentFixture),
     applyYaml(replicaSetFixture),
