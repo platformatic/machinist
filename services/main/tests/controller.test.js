@@ -3,12 +3,14 @@
 const { join } = require('node:path')
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
+const { setTimeout } = require('node:timers/promises')
 const { applyYaml, bootstrap, removeYaml, getPods } = require('./helper')
 
 const deploymentFixture = join(__dirname, 'fixtures', 'deployment.yaml')
 
 before(async () => {
   await applyYaml(deploymentFixture)
+  await setTimeout(1000)
 })
 
 after(async () => {
