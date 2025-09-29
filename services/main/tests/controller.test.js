@@ -10,7 +10,6 @@ const deploymentFixture = join(__dirname, 'fixtures', 'deployment.yaml')
 
 before(async () => {
   await applyYaml(deploymentFixture)
-  await setTimeout(1000)
 })
 
 after(async () => {

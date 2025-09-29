@@ -65,10 +65,12 @@ class K8s {
     return output
   }
 
-  async getPods (namespace, labels) {
+  async getPods (namespace, labels = {}) {
     const labelSelector = querystring.stringify(labels)
     const endpoint = `/api/v1/namespaces/${namespace}/pods?labelSelector=${labelSelector}`
     const { items } = await this.apiClient.request(endpoint)
+
+    console.log({ labelSelector, endpoint, items })
 
     return (await Promise.all(items
       .map(async pod => {
