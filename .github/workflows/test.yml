@@ -35,7 +35,4 @@ jobs:
         k3d image import platformatic/machinist-test:latest -c plt-machinist-test --verbose
 
     - name: Run test suite
-      run: |
-        kubectl get pods
-        pnpm test:unit
-        kubectl get pods
+      run: pnpm test:unit

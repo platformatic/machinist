@@ -5,13 +5,12 @@ const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
 const { applyYaml, bootstrap, removeYaml } = require('./helper')
 
-const deploymentFixture = join(__dirname, 'fixtures', 'deployment.yaml')
-const replicaSetFixture = join(__dirname, 'fixtures', 'replica-set.yaml')
-const replicationControllerFixture = join(__dirname, 'fixtures', 'replication-controller.yaml')
-const statefulSetFixture = join(__dirname, 'fixtures', 'stateful-set.yaml')
+const deploymentFixture = join(__dirname, 'fixtures', 'controller-updates', 'deployment.yaml')
+const replicaSetFixture = join(__dirname, 'fixtures', 'controller-updates', 'replica-set.yaml')
+const replicationControllerFixture = join(__dirname, 'fixtures', 'controller-updates', 'replication-controller.yaml')
+const statefulSetFixture = join(__dirname, 'fixtures', 'controller-updates', 'stateful-set.yaml')
 
 before(async () => {
-  console.log('RUNNING BEFORE')
   await Promise.allSettled([
     applyYaml(deploymentFixture),
     applyYaml(replicaSetFixture),

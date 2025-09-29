@@ -1,18 +1,17 @@
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: ReplicationController
 metadata:
-  name: nginx-echo-server-deployment
+  name: nginx-echo-server-replicationcontroller-controller-updates
   labels:
-    app.kubernetes.io/instance: deployment-fixture
+    app.kubernetes.io/instance: replicationcontroller-fixture-controller-updates
 spec:
   selector:
-    matchLabels:
-      app.kubernetes.io/instance: deployment-fixture
+    app.kubernetes.io/instance: replicationcontroller-fixture-controller-updates
   template:
     metadata:
       labels:
-        app.kubernetes.io/instance: deployment-fixture
+        app.kubernetes.io/instance: replicationcontroller-fixture-controller-updates
     spec:
       containers:
         - name: nginx-echo-server

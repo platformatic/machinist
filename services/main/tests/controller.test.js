@@ -6,7 +6,7 @@ const assert = require('node:assert/strict')
 const { setTimeout } = require('node:timers/promises')
 const { applyYaml, bootstrap, removeYaml, getPods } = require('./helper')
 
-const deploymentFixture = join(__dirname, 'fixtures', 'deployment.yaml')
+const deploymentFixture = join(__dirname, 'fixtures', 'controller', 'deployment.yaml')
 
 before(async () => {
   await applyYaml(deploymentFixture)
