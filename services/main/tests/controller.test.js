@@ -27,10 +27,11 @@ test('get all controllers in a namespace', async t => {
 
   assert.strictEqual(result.statusCode, 200, result.json())
 
-  const [controller] = result.json().controllers
-  assert.strictEqual(controller.kind, 'Deployment')
-  assert.strictEqual(controller.name, 'nginx-echo-server-deployment')
-  assert(controller.pods.length >= controller.replicas)
+  const [firstController, ...otherControllers] = result.json().controllers
+  assert.strictEqual(otherControllers.length, 0)
+  assert.strictEqual(firstController.kind, 'Deployment')
+  assert.strictEqual(firstController.name, 'nginx-echo-server-deployment')
+  assert(firstController.pods.length >= firstController.replicas)
 })
 
 test('get controller from a pod', async t => {

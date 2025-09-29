@@ -178,12 +178,17 @@ class K8s {
     const parentController = owners.find(owner => owner.controller)
     this.log.debug({ parentController, owners, controller }, 'Preparing to search for parent')
     if (parentController) {
-      return this.getController(
-        namespace,
-        parentController.name,
-        parentController.apiVersion,
-        parentController.kind
-      )
+      try {
+        return this.getController(
+          namespace,
+          parentController.name,
+          parentController.apiVersion,
+          parentController.kind
+        )
+      } catch (err) {
+        this.log.warn({ err }, 'Unable to get parent controller')
+        return controller
+      }
     }
 
     return controller
