@@ -22,6 +22,19 @@ module.exports = async function routes (fastify, options) {
                   apiVersion: { type: 'string' },
                   name: { type: 'string' },
                   replicas: { type: 'number' },
+                  metadata: {
+                    type: 'object',
+                    properties: {
+                      labels: {
+                        type: 'object',
+                        additionalProperties: { type: 'string' }
+                      },
+                      annotations: {
+                        type: 'object',
+                        additionalProperties: { type: 'string' }
+                      }
+                    }
+                  },
                   pods: {
                     type: 'array',
                     items: { $ref: 'pod#' }
@@ -94,6 +107,19 @@ module.exports = async function routes (fastify, options) {
                 apiVersion: { type: 'string' },
                 name: { type: 'string' },
                 replicas: { type: 'number' },
+                metadata: {
+                  type: 'object',
+                  properties: {
+                    labels: {
+                      type: 'object',
+                      additionalProperties: { type: 'string' }
+                    },
+                    annotations: {
+                      type: 'object',
+                      additionalProperties: { type: 'string' }
+                    }
+                  }
+                },
                 pods: {
                   type: 'array',
                   items: { $ref: 'pod#' }
