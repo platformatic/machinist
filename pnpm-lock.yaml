@@ -42,9 +42,6 @@ importers:
       ajv:
         specifier: ^8.17.1
         version: 8.17.1
-      async-cache-dedupe:
-        specifier: ^2.2.0
-        version: 2.2.0
       fast-querystring:
         specifier: ^1.1.2
         version: 1.1.2
@@ -784,9 +781,6 @@ packages:
   astral-regex@2.0.0:
     resolution: {integrity: sha512-Z7tMw1ytTXt5jqMcOP+OQteU1VuNK9Y02uuJtKQ1Sv69jXQKKg5cibLwGJow8yzZP+eAc18EmLGPal0bp36rvQ==}
     engines: {node: '>=8'}
-
-  async-cache-dedupe@2.2.0:
-    resolution: {integrity: sha512-jl4L6dGC+KLB/LIA1iIBiq7eWQ43K7lIcIdwbUUwRmfT209yH8Xm1uPTOxxlNQ7XD6/XHU7xhSr/NgPxlH04MQ==}
 
   async-function@1.0.0:
     resolution: {integrity: sha512-hsU18Ae8CDTR6Kgu9DYf0EbCr/a5iGL0rytQDobUcdpYOKokk8LEjVphnXkDkgpi0wYVsqrXuP0bZxJaTqdgoA==}
@@ -1953,9 +1947,6 @@ packages:
   minipass@7.1.2:
     resolution: {integrity: sha512-qOOzS1cBTWYF4BH8fVePDBOO9iptMnGUEZwNc/cMWnTV2nVLZ7VoNWEPHkYczZA0pdoA7dl6e7FL659nX9S2aw==}
     engines: {node: '>=16 || 14 >=14.17'}
-
-  mnemonist@0.39.8:
-    resolution: {integrity: sha512-vyWo2K3fjrUw8YeeZ1zF0fy6Mu59RHokURlld8ymdUPjMlD9EC9ov1/YPqTgqRvUN9nTr3Gqfz29LYAmu0PHPQ==}
 
   mnemonist@0.40.0:
     resolution: {integrity: sha512-kdd8AFNig2AD5Rkih7EPCXhu/iMvwevQFX/uEiGhZyPZi7fHqOoF4V4kHLpCfysxXMgQ4B52kdPMCwARshKvEg==}
@@ -4035,11 +4026,6 @@ snapshots:
 
   astral-regex@2.0.0: {}
 
-  async-cache-dedupe@2.2.0:
-    dependencies:
-      mnemonist: 0.39.8
-      safe-stable-stringify: 2.5.0
-
   async-function@1.0.0: {}
 
   atomic-sleep@1.0.0: {}
@@ -5434,10 +5420,6 @@ snapshots:
   minimist@1.2.8: {}
 
   minipass@7.1.2: {}
-
-  mnemonist@0.39.8:
-    dependencies:
-      obliterator: 2.0.5
 
   mnemonist@0.40.0:
     dependencies:
