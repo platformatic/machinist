@@ -12,7 +12,7 @@ before(async () => {
   await applyYaml(deploymentFixture)
 })
 
-test('get all controllers in a namespace', { only: true }, async t => {
+test('get all controllers in a namespace', async t => {
   const { app } = await bootstrap(t)
 
   const result = await app.inject({
@@ -32,7 +32,7 @@ test('get all controllers in a namespace', { only: true }, async t => {
 
 test('get controller from a pod', async t => {
   const { app } = await bootstrap(t)
-  const { items } = await getPods({ 'app.kubernetes.io/instance': 'deployment-fixture' })
+  const { items } = await getPods({ 'app.kubernetes.io/instance': 'deployment-fixture-controller' })
   const podName = items[0].metadata.name
 
   const result = await app.inject({
@@ -45,7 +45,7 @@ test('get controller from a pod', async t => {
 
   const [controller] = result.json().controllers
   assert.strictEqual(controller.kind, 'Deployment')
-  assert.strictEqual(controller.name, 'nginx-echo-server-deployment')
+  assert.strictEqual(controller.name, 'nginx-echo-server-deployment-controller')
   assert(controller.pods.length >= controller.replicas)
 })
 
@@ -54,7 +54,7 @@ test('get controller from controller', async t => {
 
   const result = await app.inject({
     method: 'GET',
-    url: '/controllers/default/nginx-echo-server-deployment?apiVersion=apps%2Fv1&kind=Deployment',
+    url: '/controllers/default/nginx-echo-server-deployment-controller?apiVersion=apps%2Fv1&kind=Deployment',
     headers: { 'content-type': 'application/json' }
   })
 
@@ -62,6 +62,6 @@ test('get controller from controller', async t => {
 
   const { controller } = result.json()
   assert.strictEqual(controller.kind, 'Deployment')
-  assert.strictEqual(controller.name, 'nginx-echo-server-deployment')
+  assert.strictEqual(controller.name, 'nginx-echo-server-deployment-controller')
   assert(controller.pods.length >= controller.replicas)
 })
