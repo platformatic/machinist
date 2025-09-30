@@ -23,7 +23,7 @@
     "@fastify/sensible": "^6.0.1",
     "@platformatic/service": "^2.23.0",
     "ajv": "^8.17.1",
-    "async-cache-dedupe": "^2.2.0",
+    "async-cache-dedupe": "^3.0.0",
     "fast-querystring": "^1.1.2",
     "fastify-plugin": "^5.0.1",
     "platformatic": "^2.23.0",
