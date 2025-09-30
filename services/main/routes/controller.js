@@ -25,8 +25,6 @@ module.exports = async function routes (fastify, options) {
                   metadata: {
                     type: 'object',
                     properties: {
-                      name: { type: 'string' },
-                      namespace: { type: 'string' },
                       labels: {
                         type: 'object',
                         additionalProperties: { type: 'string' }
@@ -112,8 +110,6 @@ module.exports = async function routes (fastify, options) {
                 metadata: {
                   type: 'object',
                   properties: {
-                    name: { type: 'string' },
-                    namespace: { type: 'string' },
                     labels: {
                       type: 'object',
                       additionalProperties: { type: 'string' }
