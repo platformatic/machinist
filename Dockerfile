@@ -1,4 +1,4 @@
-FROM node:22.13.1-alpine
+FROM node:22.20.0-alpine
 
 ARG COMMIT_HASH
 ARG BUILD_TIME
@@ -7,7 +7,7 @@ ENV PNPM_HOME=/home/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 
 RUN mkdir $PNPM_HOME
-RUN npm i pnpm@9 --location=global
+RUN npm i pnpm@10 --location=global
 
 ENV PLT_DEV_MODE="false"
 

@@ -21,11 +21,11 @@
     "@fastify/deepmerge": "^3.0.0",
     "@fastify/error": "^4.0.0",
     "@fastify/sensible": "^6.0.1",
-    "@platformatic/service": "^2.23.0",
+    "@platformatic/service": "^2.75.2",
     "ajv": "^8.17.1",
     "fast-querystring": "^1.1.2",
     "fastify-plugin": "^5.1.0",
-    "platformatic": "^2.23.0",
+    "platformatic": "^2.75.2",
     "pluralize": "^8.0.0",
     "split2": "^4.2.0",
     "undici": "^7.16.0"
