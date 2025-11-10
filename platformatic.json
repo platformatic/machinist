@@ -11,5 +11,8 @@
   "logger": {
     "level": "{PLT_LOGGER_LEVEL}"
   },
+  "metrics": {
+    "port": 9090
+  },
   "managementApi": true
 }
