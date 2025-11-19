@@ -1,7 +1,5 @@
 'use strict'
 
-const { spawn } = require('node:child_process')
-const { once } = require('node:events')
 const path = require('node:path')
 const { mkdtempSync, readFileSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
@@ -14,7 +12,7 @@ const K8sClient = require('../lib/k8s-client')
 
 // This name should match the name `test:setup` and `test:teardown` in package.json
 // k3d adds the `k3d-` prefix, which is saved in ~/.kube/config
-const CLUSTER_CONTEXT_NAME = "k3d-plt-machinist-test"
+const CLUSTER_CONTEXT_NAME = 'k3d-plt-machinist-test'
 
 const defaultEnv = {
   PLT_MACHINIST_DEFAULT_VOLUME_SIZE_GB: 3,
@@ -148,7 +146,7 @@ async function yamller (filePath, method) {
     .map(doc => doc.toJS())
     .map(doc => ({ body: JSON.stringify(doc), route: endpointFromKubeYaml(doc, method) }))
 
-  const appliedYaml = requests
+  await Promise.all(requests
     .map(({ body, route }) => {
       const opts = { method }
       if (!['GET', 'DELETE'].includes(method)) {
@@ -156,9 +154,7 @@ async function yamller (filePath, method) {
       }
 
       return client.request(route, opts)
-    })
-
-  await Promise.all(requests)
+    }))
 
   if (!['GET', 'DELETE'].includes(method)) {
     const waitOnResources = requests

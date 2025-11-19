@@ -3,7 +3,7 @@
 const path = require('node:path')
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtempSync, readFileSync, writeFileSync } = require('node:fs')
+const { mkdtempSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
 const { buildServer } = require('@platformatic/service')
 const Fastify = require('fastify')

@@ -24,6 +24,9 @@ jobs:
         retry_on: error
         command: pnpm install
 
+    - name: Run linter
+      run: pnpm lint
+
     - name: Create cluster
       uses: AbsaOSS/k3d-action@v2
       with:

@@ -3,7 +3,7 @@
 const { test, before } = require('node:test')
 const assert = require('node:assert/strict')
 const { join } = require('node:path')
-const { bootstrap, applyYaml, removeYaml, getPods } = require('./helper')
+const { bootstrap, applyYaml } = require('./helper')
 
 const deploymentFixture = join(__dirname, 'fixtures', 'state', 'deployment.yaml')
 

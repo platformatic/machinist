@@ -3,9 +3,7 @@
 const { readFile } = require('node:fs/promises')
 const querystring = require('fast-querystring')
 const fp = require('fastify-plugin')
-const { request, Agent } = require('undici')
 const pluralize = require('pluralize')
-const { k8sError } = require('../../errors')
 const K8sClient = require('../../lib/k8s-client')
 
 const SCHEMA = {
