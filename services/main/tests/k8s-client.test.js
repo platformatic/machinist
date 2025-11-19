@@ -5,6 +5,13 @@ const assert = require('node:assert/strict')
 const fastify = require('fastify')
 const K8sClient = require('../lib/k8s-client')
 
+const mockLogger = {
+  error: () => {},
+  warn: () => {},
+  info: () => {},
+  debug: () => {}
+}
+
 test('K8sClient retry logic on connection reset', async t => {
   const app = fastify({ logger: false })
 
@@ -32,7 +39,8 @@ test('K8sClient retry logic on connection reset', async t => {
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
     bearerToken: 'fake-token',
-    apiUrl
+    apiUrl,
+    log: mockLogger
   })
 
   const result = await client.request('/retry-test')
@@ -61,7 +69,8 @@ test('K8sClient fails after max retries on connection reset', async t => {
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
     bearerToken: 'fake-token',
-    apiUrl
+    apiUrl,
+    log: mockLogger
   })
 
   await assert.rejects(
@@ -97,7 +106,8 @@ test('K8sClient does not retry HTTP errors', async t => {
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
     bearerToken: 'fake-token',
-    apiUrl
+    apiUrl,
+    log: mockLogger
   })
 
   await assert.rejects(
@@ -113,7 +123,8 @@ test('K8sClient has clientTtl configured', t => {
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
     bearerToken: 'fake-token',
-    apiUrl: 'http://localhost:8080'
+    apiUrl: 'http://localhost:8080',
+    log: mockLogger
   })
 
   assert.ok(client, 'Client should be created')

@@ -8,6 +8,7 @@ class K8sClient {
   #dispatcher
   #authHeaders = {}
   #apiUrl
+  #log
 
   constructor (config) {
     const {
@@ -17,8 +18,11 @@ class K8sClient {
       clientKey,
       caCert,
       bearerToken,
-      apiUrl
+      apiUrl,
+      log
     } = config
+
+    this.#log = log
 
     const tls = {
       ca: [caCert],
@@ -75,29 +79,27 @@ class K8sClient {
 
       if (isSocketError && canRetry) {
         const delay = 100 * Math.pow(2, retryCount)
-        console.error({
-          message: 'K8s API connection error (HTTP/2 GOAWAY), retrying',
+        this.#log?.error({
           error: err.message,
           code: err.code,
           path,
           method: opts.method || 'GET',
           retryCount,
           retryDelayMs: delay
-        })
+        }, 'K8s API connection error (HTTP/2 GOAWAY), retrying')
 
         await setTimeout(delay)
         return this.request(path, overrides, retryCount + 1)
       }
 
       if (isSocketError) {
-        console.error({
-          message: 'K8s API connection error (HTTP/2 GOAWAY) - max retries exceeded',
+        this.#log?.error({
           error: err.message,
           code: err.code,
           path,
           method: opts.method || 'GET',
           retryCount
-        })
+        }, 'K8s API connection error (HTTP/2 GOAWAY) - max retries exceeded')
       }
 
       throw err
