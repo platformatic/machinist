@@ -31,7 +31,8 @@ class K8s {
       clientKey: clientCreds.key,
       caCert: caContent,
       bearerToken: token,
-      apiUrl: config.PLT_K8S_REST_API_URL
+      apiUrl: config.PLT_K8S_REST_API_URL,
+      log
     })
   }
 

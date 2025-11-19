@@ -10,7 +10,7 @@
     "start": "platformatic service start",
     "test": "pnpm test:setup && pnpm test:unit && pnpm test:teardown",
     "test:unit": "borp --concurrency=1 tests/*.test.js",
-    "test:setup": "k3d cluster create plt-machinist-test && k3d image import platformatic/machinist-test:latest -c plt-machinist-test",
+    "test:setup": "k3d cluster list | grep -q plt-machinist-test || k3d cluster create plt-machinist-test",
     "test:teardown": "k3d cluster rm plt-machinist-test"
   },
   "keywords": [],
