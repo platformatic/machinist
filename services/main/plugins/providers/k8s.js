@@ -3,9 +3,7 @@
 const { readFile } = require('node:fs/promises')
 const querystring = require('fast-querystring')
 const fp = require('fastify-plugin')
-const { request, Agent } = require('undici')
 const pluralize = require('pluralize')
-const { k8sError } = require('../../errors')
 const K8sClient = require('../../lib/k8s-client')
 
 const SCHEMA = {
@@ -33,7 +31,8 @@ class K8s {
       clientKey: clientCreds.key,
       caCert: caContent,
       bearerToken: token,
-      apiUrl: config.PLT_K8S_REST_API_URL
+      apiUrl: config.PLT_K8S_REST_API_URL,
+      log
     })
   }
 

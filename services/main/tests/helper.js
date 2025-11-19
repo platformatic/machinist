@@ -1,8 +1,7 @@
 'use strict'
 
-const { spawn } = require('node:child_process')
-const { once } = require('node:events')
 const path = require('node:path')
+const { setTimeout } = require('node:timers/promises')
 const { mkdtempSync, readFileSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
 const { buildServer } = require('@platformatic/service')
@@ -14,7 +13,7 @@ const K8sClient = require('../lib/k8s-client')
 
 // This name should match the name `test:setup` and `test:teardown` in package.json
 // k3d adds the `k3d-` prefix, which is saved in ~/.kube/config
-const CLUSTER_CONTEXT_NAME = "k3d-plt-machinist-test"
+const CLUSTER_CONTEXT_NAME = 'k3d-plt-machinist-test'
 
 const defaultEnv = {
   PLT_MACHINIST_DEFAULT_VOLUME_SIZE_GB: 3,
@@ -143,22 +142,33 @@ async function yamller (filePath, method) {
   })
 
   const yamlRaw = readFileSync(filePath)
-  const requests = YAML
+  const yamlDocs = YAML
     .parseAllDocuments(yamlRaw.toString())
     .map(doc => doc.toJS())
-    .map(doc => ({ body: JSON.stringify(doc), route: endpointFromKubeYaml(doc, method) }))
 
-  const appliedYaml = requests
-    .map(({ body, route }) => {
+  const requests = yamlDocs.map(doc => ({
+    doc,
+    body: JSON.stringify(doc),
+    route: endpointFromKubeYaml(doc, method)
+  }))
+
+  await Promise.all(requests
+    .map(async ({ body, route }) => {
       const opts = { method }
       if (!['GET', 'DELETE'].includes(method)) {
         opts.body = body
       }
 
-      return client.request(route, opts)
-    })
-
-  await Promise.all(requests)
+      try {
+        return await client.request(route, opts)
+      } catch (err) {
+        // Ignore 409 (AlreadyExists) errors when creating resources
+        if (method === 'POST' && err.statusCode === 409) {
+          return null
+        }
+        throw err
+      }
+    }))
 
   if (!['GET', 'DELETE'].includes(method)) {
     const waitOnResources = requests
@@ -166,6 +176,27 @@ async function yamller (filePath, method) {
         return client.stream(route)
       })
     await Promise.all(waitOnResources)
+
+    // For Deployments and similar controllers, wait for pods to be created
+    if (method === 'POST') {
+      const deploymentDocs = requests
+        .map(r => r.doc)
+        .filter(doc => ['Deployment', 'StatefulSet', 'ReplicaSet', 'ReplicationController'].includes(doc.kind))
+
+      if (deploymentDocs.length > 0) {
+        // Wait for pods to be created for each deployment
+        await Promise.all(deploymentDocs.map(async doc => {
+          const labels = doc.spec?.selector?.matchLabels || doc.spec?.template?.metadata?.labels
+          if (labels) {
+            try {
+              await getPods(labels)
+            } catch (err) {
+              // Ignore errors - pods might not be created yet
+            }
+          }
+        }))
+      }
+    }
   }
 }
 
@@ -177,7 +208,7 @@ function removeYaml (filePath) {
   return yamller(filePath, 'DELETE')
 }
 
-function getPods (labels) {
+async function getPods (labels) {
   const labelSelector = querystring.stringify(labels)
   const endpoint = `/api/v1/namespaces/${defaultEnv.PLT_K8S_NAMESPACE}/pods?labelSelector=${labelSelector}`
   const client = new K8sClient({
@@ -188,7 +219,22 @@ function getPods (labels) {
     apiUrl: clusterDetail.server
   })
 
-  return client.request(endpoint, { method: 'GET' })
+  // Retry logic to wait for pods to be created and ready
+  const maxRetries = 10
+  const retryDelay = 1000
+
+  for (let i = 0; i < maxRetries; i++) {
+    const result = await client.request(endpoint, { method: 'GET' })
+    if (result.items && result.items.length > 0) {
+      return result
+    }
+    if (i < maxRetries - 1) {
+      await setTimeout(retryDelay)
+    }
+  }
+
+  // Return empty result if no pods found after retries
+  return { items: [] }
 }
 
 module.exports = {

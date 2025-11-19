@@ -3,12 +3,12 @@
 const { test, before } = require('node:test')
 const assert = require('node:assert/strict')
 const { join } = require('node:path')
-const { bootstrap, applyYaml, removeYaml, getPods } = require('./helper')
+const { bootstrap, applyYaml, getPods } = require('./helper')
 
 const deploymentFixture = join(__dirname, 'fixtures', 'pods', 'deployment.yaml')
 
 before(async () => {
-    await applyYaml(deploymentFixture)
+  await applyYaml(deploymentFixture)
 })
 
 test('get pod', async t => {
@@ -26,7 +26,7 @@ test('get pod', async t => {
 
   assert.strictEqual(result.statusCode, 200)
 
-  const { id, status, privateIp, image, startTime, resources } = result.json()
+  const { id, image, resources } = result.json()
   assert.deepStrictEqual(resources, {
     limits: { cpu: '1', memory: '1Gi' },
     requests: { cpu: '500m', memory: '512Mi' }
