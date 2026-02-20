@@ -105,6 +105,17 @@ class K8s {
     })
   }
 
+  async getServicesByLabels (namespace, labels) {
+    const parts = []
+    for (const [k, v] of Object.entries(labels)) {
+      parts.push(`${k}=${v}`)
+    }
+    const labelSelector = parts.join(',')
+    const path = `/api/v1/namespaces/${namespace}/services?labelSelector=${labelSelector}`
+    const { items } = await this.apiClient.request(path)
+    return items
+  }
+
   async getIngressRoutes (namespace, serviceNames) {
     if (serviceNames.length === 0) {
       // TODO custom error
