@@ -93,6 +93,21 @@ rules:
     verbs:
       - update
       - patch
+  # Gateway API permissions for skew protection (opt-in).
+  # Only used when skew protection is enabled in ICC.
+  # Safe to include even if Gateway API CRDs are not installed -
+  # K8s silently ignores RBAC rules for unknown API groups.
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - httproutes
+    verbs:
+      - get
+      - list
+      - create
+      - update
+      - patch
+      - delete
 
 # If apps are going to be deployed in a namespace that is different from machinist
 # then the RoleBinding will need to have the namespace set

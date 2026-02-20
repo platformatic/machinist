@@ -33,6 +33,9 @@ jobs:
         cluster-name: plt-machinist-test
         k3d-version: v5.8.3
 
+    - name: Install Gateway API CRDs
+      run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+
     - name: Build and import test image
       run: |
         docker build . -t platformatic/machinist-test:latest -f Dockerfile.tests
