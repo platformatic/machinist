@@ -1,0 +1,21 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: platformatic-test
+spec:
+  controllerName: platformatic.dev/test-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: platform-gateway
+  namespace: default
+  labels:
+    plt.dev/managed-by: platformatic
+spec:
+  gatewayClassName: platformatic-test
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80

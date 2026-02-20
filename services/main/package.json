@@ -10,7 +10,8 @@
     "start": "platformatic service start",
     "test": "pnpm test:setup && pnpm test:unit && pnpm test:teardown",
     "test:unit": "borp --concurrency=1 tests/*.test.js",
-    "test:setup": "k3d cluster list | grep -q plt-machinist-test || k3d cluster create plt-machinist-test",
+    "test:install-crds": "kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml",
+    "test:setup": "k3d cluster list | grep -q plt-machinist-test || k3d cluster create plt-machinist-test && pnpm test:install-crds",
     "test:teardown": "k3d cluster rm plt-machinist-test"
   },
   "keywords": [],
