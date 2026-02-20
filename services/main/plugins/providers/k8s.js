@@ -116,6 +116,41 @@ class K8s {
     return items
   }
 
+  async getHTTPRoute (namespace, name) {
+    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/httproutes/${name}`
+    return this.apiClient.request(path)
+  }
+
+  async applyHTTPRoute (namespace, httpRoute) {
+    const name = httpRoute.metadata.name
+    const basePath = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/httproutes`
+
+    let existing
+    try {
+      existing = await this.apiClient.request(`${basePath}/${name}`)
+    } catch (err) {
+      if (err.statusCode !== 404) throw err
+    }
+
+    if (existing) {
+      httpRoute.metadata.resourceVersion = existing.metadata.resourceVersion
+      return this.apiClient.request(`${basePath}/${name}`, {
+        method: 'PUT',
+        body: JSON.stringify(httpRoute)
+      })
+    }
+
+    return this.apiClient.request(basePath, {
+      method: 'POST',
+      body: JSON.stringify(httpRoute)
+    })
+  }
+
+  async deleteHTTPRoute (namespace, name) {
+    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/httproutes/${name}`
+    return this.apiClient.request(path, { method: 'DELETE' })
+  }
+
   async getIngressRoutes (namespace, serviceNames) {
     if (serviceNames.length === 0) {
       // TODO custom error
