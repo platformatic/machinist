@@ -118,6 +118,11 @@ async function bootstrap (t, pluginOverrides = {}) {
   }
 }
 
+const CLUSTER_SCOPED_KINDS = new Set([
+  'GatewayClass', 'ClusterRole', 'ClusterRoleBinding',
+  'Namespace', 'Node', 'PersistentVolume'
+])
+
 function endpointFromKubeYaml (yamlDocument, method = 'POST') {
   const { kind, apiVersion, metadata } = yamlDocument
 
@@ -129,7 +134,15 @@ function endpointFromKubeYaml (yamlDocument, method = 'POST') {
   let prefix = 'api'
   if (apiVersion !== 'v1') prefix = pluralize(prefix)
 
-  return `/${prefix}/${apiVersion}/namespaces/${defaultEnv.PLT_K8S_NAMESPACE}/${pluralize(kind.toLowerCase())}${item}`
+  let nsSegment
+  if (CLUSTER_SCOPED_KINDS.has(kind)) {
+    nsSegment = ''
+  } else {
+    const ns = metadata.namespace || defaultEnv.PLT_K8S_NAMESPACE
+    nsSegment = `/namespaces/${ns}`
+  }
+
+  return `/${prefix}/${apiVersion}${nsSegment}/${pluralize(kind.toLowerCase())}${item}`
 }
 
 async function yamller (filePath, method) {
@@ -171,7 +184,8 @@ async function yamller (filePath, method) {
     }))
 
   if (!['GET', 'DELETE'].includes(method)) {
-    const waitOnResources = requests
+    const namespacedRequests = requests.filter(({ doc }) => doc.metadata.namespace)
+    const waitOnResources = namespacedRequests
       .map(({ body, route }) => {
         return client.stream(route)
       })

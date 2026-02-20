@@ -108,6 +108,13 @@ rules:
       - update
       - patch
       - delete
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - gateways
+    verbs:
+      - get
+      - list
 
 # If apps are going to be deployed in a namespace that is different from machinist
 # then the RoleBinding will need to have the namespace set

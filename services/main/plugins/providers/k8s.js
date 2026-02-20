@@ -151,6 +151,23 @@ class K8s {
     return this.apiClient.request(path, { method: 'DELETE' })
   }
 
+  async listAllGateways () {
+    const path = '/apis/gateway.networking.k8s.io/v1/gateways'
+    const { items } = await this.apiClient.request(path)
+    return items
+  }
+
+  async listGateways (namespace) {
+    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/gateways`
+    const { items } = await this.apiClient.request(path)
+    return items
+  }
+
+  async getGateway (namespace, name) {
+    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/gateways/${name}`
+    return this.apiClient.request(path)
+  }
+
   async getIngressRoutes (namespace, serviceNames) {
     if (serviceNames.length === 0) {
       // TODO custom error
