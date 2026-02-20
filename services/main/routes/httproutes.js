@@ -7,10 +7,9 @@ module.exports = async function routes (fastify, options) {
       params: {
         type: 'object',
         properties: {
-          namespace: { type: 'string' },
+          namespace: { $ref: 'k8s#/definitions/namespace' },
           name: { type: 'string' }
-        },
-        required: ['namespace', 'name']
+        }
       }
     }
   }, async (request, reply) => {
@@ -24,9 +23,8 @@ module.exports = async function routes (fastify, options) {
       params: {
         type: 'object',
         properties: {
-          namespace: { type: 'string' }
-        },
-        required: ['namespace']
+          namespace: { $ref: 'k8s#/definitions/namespace' }
+        }
       },
       body: {
         type: 'object'
@@ -43,10 +41,9 @@ module.exports = async function routes (fastify, options) {
       params: {
         type: 'object',
         properties: {
-          namespace: { type: 'string' },
+          namespace: { $ref: 'k8s#/definitions/namespace' },
           name: { type: 'string' }
-        },
-        required: ['namespace', 'name']
+        }
       }
     }
   }, async (request, reply) => {

@@ -7,11 +7,10 @@ module.exports = async function routes (fastify, options) {
       params: {
         type: 'object',
         properties: {
-          namespace: { type: 'string' }
-        },
-        required: ['namespace']
+          namespace: { $ref: 'k8s#/definitions/namespace' }
+        }
       },
-      query: {
+      querystring: {
         type: 'object',
         properties: {
           labels: {
