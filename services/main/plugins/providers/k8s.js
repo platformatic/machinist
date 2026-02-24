@@ -151,6 +151,16 @@ class K8s {
     return this.apiClient.request(path, { method: 'DELETE' })
   }
 
+  async deleteDeployment (namespace, name) {
+    const path = `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`
+    return this.apiClient.request(path, { method: 'DELETE' })
+  }
+
+  async deleteService (namespace, name) {
+    const path = `/api/v1/namespaces/${namespace}/services/${name}`
+    return this.apiClient.request(path, { method: 'DELETE' })
+  }
+
   async listAllGateways () {
     const path = '/apis/gateway.networking.k8s.io/v1/gateways'
     const { items } = await this.apiClient.request(path)

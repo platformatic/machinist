@@ -93,6 +93,15 @@ rules:
     verbs:
       - update
       - patch
+  # Skew protection auto-cleanup: delete expired Deployments and Services
+  - apiGroups:
+      - ""
+      - apps
+    resources:
+      - deployments
+      - services
+    verbs:
+      - delete
   # Gateway API permissions for skew protection (opt-in).
   # Only used when skew protection is enabled in ICC.
   # Safe to include even if Gateway API CRDs are not installed -

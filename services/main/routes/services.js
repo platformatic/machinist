@@ -1,6 +1,6 @@
 'use strict'
 
-module.exports = async function routes (fastify, options) {
+module.exports = async function routes (fastify) {
   fastify.get('/services/:namespace', {
     schema: {
       description: 'Get services by metadata labels',
@@ -32,5 +32,21 @@ module.exports = async function routes (fastify, options) {
     }
 
     return fastify.k8s.getServicesByLabels(namespace, labels)
+  })
+
+  fastify.delete('/services/:namespace/:name', {
+    schema: {
+      description: 'Delete a Service',
+      params: {
+        type: 'object',
+        properties: {
+          namespace: { $ref: 'k8s#/definitions/namespace' },
+          name: { type: 'string' }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    const { namespace, name } = request.params
+    return fastify.k8s.deleteService(namespace, name)
   })
 }
