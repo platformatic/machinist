@@ -148,6 +148,22 @@ module.exports = async function routes (fastify, options) {
     }
   })
 
+  fastify.delete('/deployments/:namespace/:name', {
+    schema: {
+      description: 'Delete a Deployment',
+      params: {
+        type: 'object',
+        properties: {
+          namespace: { $ref: 'k8s#/definitions/namespace' },
+          name: { type: 'string' }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    const { namespace, name } = request.params
+    return fastify.k8s.deleteDeployment(namespace, name)
+  })
+
   fastify.post('/controllers/:namespace/:controllerId', {
     schema: {
       description: 'Update number of replicas for a controller',
