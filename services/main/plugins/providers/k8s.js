@@ -307,7 +307,9 @@ class K8s {
       }
     }
 
-    throw new Error(`Controller not found: ${name} in scope ${scope}`)
+    const err = new Error(`Controller not found: ${name} in scope ${scope}`)
+    err.statusCode = 404
+    throw err
   }
 
   async #getRawController (scope, name, apiVersion, kind) {

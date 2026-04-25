@@ -85,5 +85,5 @@ test('fail to update when no controller found', async t => {
     body: JSON.stringify({ replicas: 7 })
   })
 
-  assert.strictEqual(result.statusCode, 500)
+  assert.strictEqual(result.statusCode, 404)
 })
