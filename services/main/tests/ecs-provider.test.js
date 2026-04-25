@@ -2,7 +2,6 @@
 
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
-const { Ecs } = require('../plugins/providers/ecs')
 
 function mockTask (overrides = {}) {
   return {
@@ -27,73 +26,6 @@ function mockTask (overrides = {}) {
   }
 }
 
-function mockService (overrides = {}) {
-  return {
-    serviceArn: 'arn:aws:ecs:us-east-1:123456789:service/my-cluster/my-service',
-    serviceName: 'my-service',
-    status: 'ACTIVE',
-    desiredCount: 3,
-    runningCount: 3,
-    pendingCount: 0,
-    taskDefinition: 'arn:aws:ecs:us-east-1:123456789:task-definition/myapp:5',
-    loadBalancers: [{
-      targetGroupArn: 'arn:aws:elasticloadbalancing:us-east-1:123456789:targetgroup/my-tg/abc',
-      containerName: 'web',
-      containerPort: 8080
-    }],
-    tags: [
-      { key: 'app.kubernetes.io/name', value: 'myapp' },
-      { key: 'plt.dev/version', value: '1.0.0' }
-    ],
-    ...overrides
-  }
-}
-
-function createEcsProvider (sendMock) {
-  const provider = new Ecs({
-    config: { PLT_ECS_REGION: 'us-east-1', PLT_ECS_CLUSTER: 'my-cluster' },
-    log: { debug () {}, info () {}, warn () {}, error () {} }
-  })
-
-  // Replace the SDK clients with mocks
-  provider._ecs = { send: sendMock }
-  provider._tagging = { send: sendMock }
-
-  // Patch private fields via a small trick — recreate with overridden internals
-  // We need to access private fields, so we'll use a subclass approach
-  return provider
-}
-
-// Since we use private fields (#ecs, #tagging), we need a testable subclass
-class TestableEcs extends Ecs {
-  constructor (opts, ecsSend, taggingSend) {
-    super(opts)
-    this._ecsSend = ecsSend
-    this._taggingSend = taggingSend || ecsSend
-  }
-}
-
-// Override the private SDK access via a factory
-function createTestProvider (handlers = {}) {
-  const config = { PLT_ECS_REGION: 'us-east-1', PLT_ECS_CLUSTER: 'my-cluster' }
-  const log = { debug () {}, info () {}, warn () {}, error () {} }
-
-  // We can't mock private fields directly, so we mock at the AWS SDK level
-  // by using the middleware stack. Instead, let's create a provider and
-  // override the SDK client's send method.
-  const provider = new Ecs({ config, log })
-
-  // Access the private clients via Object.getOwnPropertyNames trick
-  // This works because JS private fields are stored as WeakMap entries
-  // BUT actual #private fields can't be accessed this way.
-
-  // Alternative approach: mock at the module level
-  // For now, let's test via the HTTP routes instead (integration-style)
-  return provider
-}
-
-// Since private fields can't be mocked externally, we test through
-// the Fastify route layer with a mock provider object.
 function createMockProvider (overrides = {}) {
   return {
     async getMachine (scope, machineId) {
