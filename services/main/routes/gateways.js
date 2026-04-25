@@ -1,42 +1,21 @@
 'use strict'
 
-module.exports = async function routes (fastify, options) {
-  fastify.get('/gateway/gateways', {
-    schema: {
-      description: 'List all Gateways cluster-wide'
-    }
-  }, async (request, reply) => {
-    return fastify.k8s.listAllGateways()
-  })
+// TODO(ecs): Skew protection — design provider-agnostic traffic routing
+// abstraction when adding skew protection for non-K8s providers.
 
-  fastify.get('/gateway/gateways/:namespace', {
+module.exports = async function routes (fastify) {
+  fastify.get('/gateway/gateways/:scope', {
     schema: {
-      description: 'List Gateways in a namespace',
+      description: 'List Gateways in a scope',
       params: {
         type: 'object',
         properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' }
+          scope: { $ref: 'machinist#/definitions/scope' }
         }
       }
     }
-  }, async (request, reply) => {
-    const { namespace } = request.params
-    return fastify.k8s.listGateways(namespace)
-  })
-
-  fastify.get('/gateway/gateways/:namespace/:name', {
-    schema: {
-      description: 'Get a specific Gateway',
-      params: {
-        type: 'object',
-        properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' },
-          name: { type: 'string' }
-        }
-      }
-    }
-  }, async (request, reply) => {
-    const { namespace, name } = request.params
-    return fastify.k8s.getGateway(namespace, name)
+  }, async (request) => {
+    const { scope } = request.params
+    return fastify.provider.listGateways(scope)
   })
 }

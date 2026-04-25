@@ -7,7 +7,12 @@ const { join } = require('path')
 async function plugin (fastify, options) {
   fastify.register(sensible)
   fastify.register(autoload, { dir: join(__dirname, 'plugins'), options })
-  fastify.register(autoload, { dir: join(__dirname, 'routes') })
+
+  const provider = process.env.PLT_PROVIDER || 'k8s'
+  fastify.register(autoload, {
+    dir: join(__dirname, 'routes'),
+    options: { prefix: `/${provider}` }
+  })
 }
 
 module.exports = plugin

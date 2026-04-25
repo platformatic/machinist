@@ -1,13 +1,33 @@
 'use strict'
 
+const serviceEndpointSchema = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    labels: {
+      type: 'object',
+      additionalProperties: { type: 'string' }
+    },
+    ports: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          port: { type: 'number' },
+          protocol: { type: 'string' }
+        }
+      }
+    }
+  }
+}
+
 module.exports = async function routes (fastify) {
-  fastify.get('/services/:namespace', {
+  fastify.get('/services/:scope', {
     schema: {
-      description: 'Get services by metadata labels',
       params: {
         type: 'object',
         properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' }
+          scope: { $ref: 'machinist#/definitions/scope' }
         }
       },
       querystring: {
@@ -19,10 +39,16 @@ module.exports = async function routes (fastify) {
           }
         },
         required: ['labels']
+      },
+      response: {
+        200: {
+          type: 'array',
+          items: serviceEndpointSchema
+        }
       }
     }
-  }, async (request, reply) => {
-    const { namespace } = request.params
+  }, async (request) => {
+    const { scope } = request.params
     const labelEntries = request.query.labels || []
 
     const labels = {}
@@ -31,22 +57,21 @@ module.exports = async function routes (fastify) {
       labels[key] = value
     }
 
-    return fastify.k8s.getServicesByLabels(namespace, labels)
+    return fastify.provider.getServicesByLabels(scope, labels)
   })
 
-  fastify.delete('/services/:namespace/:name', {
+  fastify.delete('/services/:scope/:name', {
     schema: {
-      description: 'Delete a Service',
       params: {
         type: 'object',
         properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' },
+          scope: { $ref: 'machinist#/definitions/scope' },
           name: { type: 'string' }
         }
       }
     }
-  }, async (request, reply) => {
-    const { namespace, name } = request.params
-    return fastify.k8s.deleteService(namespace, name)
+  }, async (request) => {
+    const { scope, name } = request.params
+    return fastify.provider.deleteService(scope, name)
   })
 }

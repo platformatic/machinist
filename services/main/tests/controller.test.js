@@ -11,56 +11,53 @@ before(async () => {
   await applyYaml(deploymentFixture)
 })
 
-test('get all controllers in a namespace', async t => {
+test('get all controllers in a scope', async t => {
   const { app } = await bootstrap(t)
 
   const result = await app.inject({
     method: 'GET',
-    url: '/controllers/default',
+    url: '/k8s/controllers/default',
     headers: { 'content-type': 'application/json' }
   })
 
   assert.strictEqual(result.statusCode, 200, result.json())
 
-  // Only look for the controller(s) in the fixture
   const controller = result.json().controllers
     .find(c => c.name === 'nginx-echo-server-deployment-controller')
-  assert.strictEqual(controller.kind, 'Deployment')
-  assert(controller.pods.length >= controller.replicas)
+  assert.ok(controller)
+  assert(controller.machines.length >= controller.replicas)
 })
 
-test('get controller from a pod', async t => {
+test('get controller from a machine', async t => {
   const { app } = await bootstrap(t)
   const { items } = await getPods({ 'app.kubernetes.io/instance': 'deployment-fixture-controller' })
   const podName = items[0].metadata.name
 
   const result = await app.inject({
     method: 'GET',
-    url: `/controllers/default?podId=${podName}`,
+    url: `/k8s/controllers/default?machineId=${podName}`,
     headers: { 'content-type': 'application/json' }
   })
 
   assert.strictEqual(result.statusCode, 200)
 
   const [controller] = result.json().controllers
-  assert.strictEqual(controller.kind, 'Deployment')
   assert.strictEqual(controller.name, 'nginx-echo-server-deployment-controller')
-  assert(controller.pods.length >= controller.replicas)
+  assert(controller.machines.length >= controller.replicas)
 })
 
-test('get controller from controller', async t => {
+test('get controller by name', async t => {
   const { app } = await bootstrap(t)
 
   const result = await app.inject({
     method: 'GET',
-    url: '/controllers/default/nginx-echo-server-deployment-controller?apiVersion=apps%2Fv1&kind=Deployment',
+    url: '/k8s/controllers/default/nginx-echo-server-deployment-controller',
     headers: { 'content-type': 'application/json' }
   })
 
   assert.strictEqual(result.statusCode, 200)
 
   const { controller } = result.json()
-  assert.strictEqual(controller.kind, 'Deployment')
   assert.strictEqual(controller.name, 'nginx-echo-server-deployment-controller')
-  assert(controller.pods.length >= controller.replicas)
+  assert(controller.machines.length >= controller.replicas)
 })

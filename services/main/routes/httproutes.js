@@ -1,53 +1,40 @@
 'use strict'
 
-module.exports = async function routes (fastify, options) {
-  fastify.get('/gateway/httproutes/:namespace/:name', {
-    schema: {
-      description: 'Get an HTTPRoute by name',
-      params: {
-        type: 'object',
-        properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' },
-          name: { type: 'string' }
-        }
-      }
-    }
-  }, async (request, reply) => {
-    const { namespace, name } = request.params
-    return fastify.k8s.getHTTPRoute(namespace, name)
-  })
+// TODO(ecs): Skew protection — design provider-agnostic traffic routing
+// abstraction when adding skew protection for non-K8s providers.
 
-  fastify.put('/gateway/httproutes/:namespace', {
+module.exports = async function routes (fastify) {
+  fastify.put('/gateway/httproutes/:scope', {
     schema: {
       description: 'Create or update an HTTPRoute',
       params: {
         type: 'object',
         properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' }
+          scope: { $ref: 'machinist#/definitions/scope' }
         }
       },
       body: {
         type: 'object'
       }
     }
-  }, async (request, reply) => {
-    const { namespace } = request.params
-    return fastify.k8s.applyHTTPRoute(namespace, request.body)
+  }, async (request) => {
+    const { scope } = request.params
+    return fastify.provider.applyHTTPRoute(scope, request.body)
   })
 
-  fastify.delete('/gateway/httproutes/:namespace/:name', {
+  fastify.delete('/gateway/httproutes/:scope/:name', {
     schema: {
       description: 'Delete an HTTPRoute',
       params: {
         type: 'object',
         properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' },
+          scope: { $ref: 'machinist#/definitions/scope' },
           name: { type: 'string' }
         }
       }
     }
-  }, async (request, reply) => {
-    const { namespace, name } = request.params
-    return fastify.k8s.deleteHTTPRoute(namespace, name)
+  }, async (request) => {
+    const { scope, name } = request.params
+    return fastify.provider.deleteHTTPRoute(scope, name)
   })
 }

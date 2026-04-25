@@ -18,6 +18,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-ecs": "^3.1035.0",
+    "@aws-sdk/client-resource-groups-tagging-api": "^3.1035.0",
     "@fastify/autoload": "^6.0.2",
     "@fastify/deepmerge": "^3.0.0",
     "@fastify/error": "^4.0.0",

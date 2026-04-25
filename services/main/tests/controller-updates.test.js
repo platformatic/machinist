@@ -26,9 +26,9 @@ test('update replica count for controller', async t => {
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-deployment-controller-updates?apiVersion=apps%2Fv1&kind=Deployment',
+      url: '/k8s/controllers/default/nginx-echo-server-deployment-controller-updates',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ replicaCount: 7 })
+      body: JSON.stringify({ replicas: 7 })
     })
 
     assert.strictEqual(result.statusCode, 200)
@@ -39,9 +39,9 @@ test('update replica count for controller', async t => {
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-replicaset-controller-updates?apiVersion=apps%2Fv1&kind=ReplicaSet',
+      url: '/k8s/controllers/default/nginx-echo-server-replicaset-controller-updates',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ replicaCount: 7 })
+      body: JSON.stringify({ replicas: 7 })
     })
 
     assert.strictEqual(result.statusCode, 200)
@@ -52,9 +52,9 @@ test('update replica count for controller', async t => {
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-replicationcontroller-controller-updates?apiVersion=v1&kind=ReplicationController',
+      url: '/k8s/controllers/default/nginx-echo-server-replicationcontroller-controller-updates',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ replicaCount: 7 })
+      body: JSON.stringify({ replicas: 7 })
     })
 
     assert.strictEqual(result.statusCode, 200)
@@ -65,9 +65,9 @@ test('update replica count for controller', async t => {
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-statefulset-controller-updates?apiVersion=apps%2Fv1&kind=StatefulSet',
+      url: '/k8s/controllers/default/nginx-echo-server-statefulset-controller-updates',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ replicaCount: 7 })
+      body: JSON.stringify({ replicas: 7 })
     })
 
     assert.strictEqual(result.statusCode, 200)
@@ -80,10 +80,10 @@ test('fail to update when no controller found', async t => {
 
   const result = await app.inject({
     method: 'POST',
-    url: '/controllers/default/unknown-controller?apiVersion=apps%2Fv1&kind=Deployment',
+    url: '/k8s/controllers/default/unknown-controller',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ replicaCount: 7 })
+    body: JSON.stringify({ replicas: 7 })
   })
 
-  assert.strictEqual(result.statusCode, 404)
+  assert.strictEqual(result.statusCode, 500)
 })

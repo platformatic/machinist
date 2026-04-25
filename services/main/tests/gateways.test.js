@@ -19,7 +19,7 @@ test('gateway auto-discovery', async t => {
 
     const result = await app.inject({
       method: 'GET',
-      url: '/gateway/gateways'
+      url: '/k8s/gateway/gateways'
     })
 
     assert.strictEqual(result.statusCode, 200)
@@ -35,7 +35,7 @@ test('gateway auto-discovery', async t => {
 
     const result = await app.inject({
       method: 'GET',
-      url: '/gateway/gateways/default'
+      url: '/k8s/gateway/gateways/default'
     })
 
     assert.strictEqual(result.statusCode, 200)
@@ -51,7 +51,7 @@ test('gateway auto-discovery', async t => {
 
     const result = await app.inject({
       method: 'GET',
-      url: '/gateway/gateways/default/platform-gateway'
+      url: '/k8s/gateway/gateways/default/platform-gateway'
     })
 
     assert.strictEqual(result.statusCode, 200)
@@ -66,7 +66,7 @@ test('gateway auto-discovery', async t => {
 
     const result = await app.inject({
       method: 'GET',
-      url: '/gateway/gateways/default/does-not-exist'
+      url: '/k8s/gateway/gateways/default/does-not-exist'
     })
 
     assert.strictEqual(result.statusCode, 404)
@@ -77,7 +77,7 @@ test('gateway auto-discovery', async t => {
 
     const result = await app.inject({
       method: 'GET',
-      url: '/gateway/gateways/default/platform-gateway'
+      url: '/k8s/gateway/gateways/default/platform-gateway'
     })
 
     assert.strictEqual(result.statusCode, 200)
