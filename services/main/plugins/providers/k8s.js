@@ -19,17 +19,7 @@ const SCHEMA = {
   }
 }
 
-// Try these K8s API groups in order when resolving a controller by name
-const CONTROLLER_TYPES = [
-  { apiVersion: 'apps/v1', kind: 'Deployment' },
-  { apiVersion: 'apps/v1', kind: 'StatefulSet' },
-  { apiVersion: 'apps/v1', kind: 'ReplicaSet' },
-  { apiVersion: 'v1', kind: 'ReplicationController' }
-]
-
 class K8s {
-  #controllerCache = new Map()
-
   constructor ({ config, log, caContent, token, authType, clientCreds }) {
     this.log = log
     this.config = config
@@ -105,17 +95,17 @@ class K8s {
     for (const machine of machines) {
       if (!machine.controller) continue
 
-      const name = machine.controller.name
+      const { name, kind, apiVersion } = machine.controller
 
       if (controllersMap[name]) {
         controllersMap[name].machines.push(machine)
       } else {
-        const { apiVersion, kind } = await this.#resolveControllerCoordinates(scope, name)
         const raw = await this.#getRawController(scope, name, apiVersion, kind)
         controllersMap[name] = {
           name,
           replicas: raw.spec?.replicas,
           labels: raw.metadata?.labels ?? {},
+          providerMetadata: { kind, apiVersion },
           machines: [machine]
         }
       }
@@ -124,8 +114,8 @@ class K8s {
     return Object.values(controllersMap)
   }
 
-  async getController (scope, name) {
-    const { apiVersion, kind } = await this.#resolveControllerCoordinates(scope, name)
+  async getController (scope, name, providerMetadata) {
+    const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
     const raw = await this.#getRawController(scope, name, apiVersion, kind)
 
     const matchLabels = raw.spec?.selector?.matchLabels || {}
@@ -135,12 +125,13 @@ class K8s {
       name,
       replicas: raw.spec?.replicas,
       labels: raw.metadata?.labels ?? {},
+      providerMetadata: { kind, apiVersion },
       machines
     }
   }
 
-  async updateControllerReplicas (scope, name, replicaCount) {
-    const { apiVersion, kind } = await this.#resolveControllerCoordinates(scope, name)
+  async updateControllerReplicas (scope, name, replicaCount, providerMetadata) {
+    const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
     const raw = await this.#getRawController(scope, name, apiVersion, kind)
 
     raw.spec.replicas = replicaCount
@@ -155,12 +146,13 @@ class K8s {
     return {
       name: updated.metadata?.name,
       replicas: updated.spec?.replicas,
-      labels: updated.metadata?.labels ?? {}
+      labels: updated.metadata?.labels ?? {},
+      providerMetadata: { kind, apiVersion }
     }
   }
 
-  async deleteController (scope, name) {
-    const { apiVersion, kind } = await this.#resolveControllerCoordinates(scope, name)
+  async deleteController (scope, name, providerMetadata) {
+    const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
     const controllerPath = this.#createControllerPath(scope, name, apiVersion, kind)
     return this.apiClient.request(controllerPath, { method: 'DELETE' })
   }
@@ -231,11 +223,18 @@ class K8s {
       labels: pod.metadata?.labels ?? {}
     }
 
+    // Include kind/apiVersion alongside name so getControllers can build
+    // providerMetadata without re-fetching. Fastify response schemas strip
+    // the extra fields when serializing the public Machine.
     if (pod._resolvedController) {
-      output.controller = { name: pod._resolvedController.metadata?.name || pod._resolvedController.name }
+      output.controller = {
+        name: pod._resolvedController.metadata?.name || pod._resolvedController.name,
+        kind: pod._resolvedController.kind,
+        apiVersion: pod._resolvedController.apiVersion
+      }
     }
 
-    if (pod.spec.containers.length > 0) {
+    if (pod.spec?.containers?.length > 0) {
       output.image = pod.spec.containers[0].image
       output.resources = pod.spec.containers[0].resources
     }
@@ -256,7 +255,8 @@ class K8s {
 
   /**
    * Recursively walks ownerReferences to find the top-level controller.
-   * Caches the result for subsequent lookups.
+   * The kind/apiVersion at each level comes from the ownerReference itself
+   * (K8s populates it for free), so no discovery is needed here.
    */
   async #resolveTopController (scope, name, apiVersion, kind) {
     const controllerPath = this.#createControllerPath(scope, name, apiVersion, kind)
@@ -265,9 +265,6 @@ class K8s {
     if (!controller.name) {
       controller.name = name
     }
-
-    // Cache the coordinates
-    this.#controllerCache.set(`${scope}/${name}`, { apiVersion, kind })
 
     const owners = controller.metadata?.ownerReferences ?? []
     const parentController = owners.find(owner => owner.controller)
@@ -287,29 +284,20 @@ class K8s {
   }
 
   /**
-   * Resolves (apiVersion, kind) for a controller name.
-   * Checks cache first, then tries common K8s API groups.
+   * Validates the providerMetadata sent by the caller.
+   *
+   * The K8s provider needs (kind, apiVersion) to build the right API path —
+   * Deployments, StatefulSets, etc. live at different URLs. Callers obtain
+   * these on first discovery (via getControllers walking ownerReferences) and
+   * are expected to persist + round-trip them on every subsequent call.
+   *
+   * Missing them is a programming error, not something we silently recover from.
    */
-  async #resolveControllerCoordinates (scope, name) {
-    const cached = this.#controllerCache.get(`${scope}/${name}`)
-    if (cached) return cached
-
-    for (const { apiVersion, kind } of CONTROLLER_TYPES) {
-      try {
-        const path = this.#createControllerPath(scope, name, apiVersion, kind)
-        await this.apiClient.request(path)
-        const coords = { apiVersion, kind }
-        this.#controllerCache.set(`${scope}/${name}`, coords)
-        return coords
-      } catch (err) {
-        if (err.statusCode === 404) continue
-        throw err
-      }
+  #requireCoordinates (providerMetadata) {
+    if (!providerMetadata || !providerMetadata.kind || !providerMetadata.apiVersion) {
+      throw new Error('K8s provider requires providerMetadata with `kind` and `apiVersion`')
     }
-
-    const err = new Error(`Controller not found: ${name} in scope ${scope}`)
-    err.statusCode = 404
-    throw err
+    return { kind: providerMetadata.kind, apiVersion: providerMetadata.apiVersion }
   }
 
   async #getRawController (scope, name, apiVersion, kind) {

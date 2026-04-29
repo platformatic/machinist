@@ -26,6 +26,9 @@ test('get all controllers in a scope', async t => {
     .find(c => c.name === 'nginx-echo-server-deployment-controller')
   assert.ok(controller)
   assert(controller.machines.length >= controller.replicas)
+  // Discovery via ownerReferences should populate providerMetadata.
+  assert.strictEqual(controller.providerMetadata.kind, 'Deployment')
+  assert.strictEqual(controller.providerMetadata.apiVersion, 'apps/v1')
 })
 
 test('get controller from a machine', async t => {
@@ -46,12 +49,13 @@ test('get controller from a machine', async t => {
   assert(controller.machines.length >= controller.replicas)
 })
 
-test('get controller by name', async t => {
+test('get controller by name with providerMetadata', async t => {
   const { app } = await bootstrap(t)
 
   const result = await app.inject({
     method: 'GET',
     url: '/k8s/controllers/default/nginx-echo-server-deployment-controller',
+    query: { kind: 'Deployment', apiVersion: 'apps/v1' },
     headers: { 'content-type': 'application/json' }
   })
 
@@ -60,4 +64,19 @@ test('get controller by name', async t => {
   const { controller } = result.json()
   assert.strictEqual(controller.name, 'nginx-echo-server-deployment-controller')
   assert(controller.machines.length >= controller.replicas)
+  assert.strictEqual(controller.providerMetadata.kind, 'Deployment')
+  assert.strictEqual(controller.providerMetadata.apiVersion, 'apps/v1')
+})
+
+test('get controller by name without providerMetadata returns 500', async t => {
+  const { app } = await bootstrap(t)
+
+  const result = await app.inject({
+    method: 'GET',
+    url: '/k8s/controllers/default/nginx-echo-server-deployment-controller',
+    headers: { 'content-type': 'application/json' }
+  })
+
+  // K8s provider rejects the call because kind/apiVersion are required.
+  assert.strictEqual(result.statusCode, 500)
 })

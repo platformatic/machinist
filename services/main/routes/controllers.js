@@ -9,6 +9,10 @@ const controllerSchema = {
       type: 'object',
       additionalProperties: { type: 'string' }
     },
+    providerMetadata: {
+      type: 'object',
+      additionalProperties: true
+    },
     machines: {
       type: 'array',
       items: { $ref: 'machine#' }
@@ -29,7 +33,9 @@ module.exports = async function routes (fastify) {
         type: 'object',
         properties: {
           machineId: { type: 'string' }
-        }
+        },
+        // Allow opaque providerMetadata fields (e.g. kind, apiVersion for K8s)
+        additionalProperties: true
       },
       response: {
         200: {
@@ -60,6 +66,11 @@ module.exports = async function routes (fastify) {
           name: { type: 'string' }
         }
       },
+      querystring: {
+        type: 'object',
+        // Opaque provider-specific identifying info (e.g. kind, apiVersion for K8s)
+        additionalProperties: true
+      },
       response: {
         200: {
           type: 'object',
@@ -71,7 +82,8 @@ module.exports = async function routes (fastify) {
     }
   }, async (request) => {
     const { scope, name } = request.params
-    const controller = await fastify.provider.getController(scope, name)
+    const providerMetadata = { ...request.query }
+    const controller = await fastify.provider.getController(scope, name, providerMetadata)
     return { controller }
   })
 
@@ -83,6 +95,11 @@ module.exports = async function routes (fastify) {
           scope: { $ref: 'machinist#/definitions/scope' },
           name: { type: 'string' }
         }
+      },
+      querystring: {
+        type: 'object',
+        // providerMetadata fields (e.g. kind, apiVersion for K8s)
+        additionalProperties: true
       },
       body: {
         type: 'object',
@@ -98,7 +115,8 @@ module.exports = async function routes (fastify) {
   }, async (request) => {
     const { scope, name } = request.params
     const { replicas } = request.body
-    return fastify.provider.updateControllerReplicas(scope, name, replicas)
+    const providerMetadata = { ...request.query }
+    return fastify.provider.updateControllerReplicas(scope, name, replicas, providerMetadata)
   })
 
   fastify.delete('/controllers/:scope/:name', {
@@ -109,10 +127,15 @@ module.exports = async function routes (fastify) {
           scope: { $ref: 'machinist#/definitions/scope' },
           name: { type: 'string' }
         }
+      },
+      querystring: {
+        type: 'object',
+        additionalProperties: true
       }
     }
   }, async (request) => {
     const { scope, name } = request.params
-    return fastify.provider.deleteController(scope, name)
+    const providerMetadata = { ...request.query }
+    return fastify.provider.deleteController(scope, name, providerMetadata)
   })
 }

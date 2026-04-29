@@ -56,6 +56,7 @@ function createMockProvider (overrides = {}) {
         name: 'my-service',
         replicas: 3,
         labels: { 'app.kubernetes.io/name': 'myapp' },
+        providerMetadata: {},
         machines: [{
           id: machineId || 'abc123',
           status: 'RUNNING',
@@ -71,6 +72,7 @@ function createMockProvider (overrides = {}) {
         name,
         replicas: 3,
         labels: { 'app.kubernetes.io/name': 'myapp' },
+        providerMetadata: {},
         machines: [{
           id: 'abc123',
           status: 'RUNNING',
@@ -82,7 +84,7 @@ function createMockProvider (overrides = {}) {
       }
     },
     async updateControllerReplicas (scope, name, replicas) {
-      return { name, replicas, labels: {} }
+      return { name, replicas, labels: {}, providerMetadata: {} }
     },
     async deleteController () {},
     async getServicesByLabels (scope, labels) {

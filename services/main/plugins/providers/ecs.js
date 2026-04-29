@@ -122,7 +122,8 @@ class Ecs {
         controllers.push({
           name: svc.serviceName,
           replicas: svc.desiredCount,
-          labels: this.#tagsToLabels(svc.tags)
+          labels: this.#tagsToLabels(svc.tags),
+          providerMetadata: {}
         })
       }
     }
@@ -157,6 +158,7 @@ class Ecs {
       name: svc.serviceName,
       replicas: svc.desiredCount,
       labels: this.#tagsToLabels(svc.tags),
+      providerMetadata: {},
       machines
     }
   }
@@ -171,7 +173,8 @@ class Ecs {
     return {
       name: service.serviceName,
       replicas: service.desiredCount,
-      labels: this.#tagsToLabels(service.tags)
+      labels: this.#tagsToLabels(service.tags),
+      providerMetadata: {}
     }
   }
 
