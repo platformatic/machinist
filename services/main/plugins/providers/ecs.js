@@ -15,6 +15,7 @@ const {
   ResourceGroupsTaggingAPIClient,
   GetResourcesCommand
 } = require('@aws-sdk/client-resource-groups-tagging-api')
+const errors = require('../../errors')
 
 const SCHEMA = {
   type: 'object',
@@ -219,9 +220,25 @@ class Ecs {
   }
 
   // ── Skew protection ──
+  //
+  // K8s uses Gateway API (Gateway + HTTPRoute) for canary traffic routing.
+  // ECS equivalent would be ALB listener rules with weighted target groups,
+  // but this is not yet designed/implemented. Throw 501 so the caller sees
+  // a clear "not supported" instead of a TypeError 500.
+  //
   // TODO(ecs): Design provider-agnostic traffic routing abstraction.
-  // K8s uses Gateway API (listGateways, applyHTTPRoute, deleteHTTPRoute).
-  // ECS equivalent: ALB listener rules with weighted target groups.
+
+  async listGateways () {
+    throw new errors.NotImplementedByProvider('Skew protection (listGateways)', 'ecs')
+  }
+
+  async applyHTTPRoute () {
+    throw new errors.NotImplementedByProvider('Skew protection (applyHTTPRoute)', 'ecs')
+  }
+
+  async deleteHTTPRoute () {
+    throw new errors.NotImplementedByProvider('Skew protection (deleteHTTPRoute)', 'ecs')
+  }
 
   // ── Private helpers ──
 

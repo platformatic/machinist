@@ -339,3 +339,104 @@ test('DELETE /ecs/services/:scope/:name is a no-op for ECS', async (t) => {
   assert.strictEqual(res.statusCode, 200)
   assert.strictEqual(called, true)
 })
+
+// ── Skew protection: ECS provider rejects with a clean 501 ──
+
+const { Ecs } = require('../plugins/providers/ecs')
+
+function buildEcs () {
+  return new Ecs({
+    config: { PLT_ECS_REGION: 'us-east-1', PLT_ECS_CLUSTER: 'my-cluster' },
+    log: { debug () {}, info () {}, warn () {}, error () {} }
+  })
+}
+
+const NOT_SUPPORTED = err =>
+  err.code === 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER' &&
+  err.statusCode === 501 &&
+  /ecs/.test(err.message)
+
+test('Ecs#listGateways throws 501 not-implemented', async () => {
+  const ecs = buildEcs()
+  await assert.rejects(() => ecs.listGateways('my-cluster'), NOT_SUPPORTED)
+})
+
+test('Ecs#applyHTTPRoute throws 501 not-implemented', async () => {
+  const ecs = buildEcs()
+  await assert.rejects(() => ecs.applyHTTPRoute('my-cluster', {}), NOT_SUPPORTED)
+})
+
+test('Ecs#deleteHTTPRoute throws 501 not-implemented', async () => {
+  const ecs = buildEcs()
+  await assert.rejects(() => ecs.deleteHTTPRoute('my-cluster', 'foo'), NOT_SUPPORTED)
+})
+
+test('skew protection error message names the operation', async () => {
+  const ecs = buildEcs()
+  await assert.rejects(
+    () => ecs.applyHTTPRoute('my-cluster', {}),
+    err => {
+      assert.match(err.message, /Skew protection/)
+      assert.match(err.message, /applyHTTPRoute/)
+      assert.match(err.message, /ecs/)
+      return true
+    }
+  )
+})
+
+// ── Routes propagate the 501 to clients ──
+
+async function buildAppWithSkewRoutes (provider) {
+  const Fastify = require('fastify')
+  const sharedSchemas = require('../plugins/shared-schemas')
+  const app = Fastify({ logger: false })
+  await app.register(sharedSchemas)
+  app.decorate('provider', provider)
+  await app.register(require('../routes/gateways'), { prefix: '/ecs' })
+  await app.register(require('../routes/httproutes'), { prefix: '/ecs' })
+  await app.ready()
+  return app
+}
+
+test('GET /ecs/gateway/gateways/:scope returns 501 from ECS provider', async (t) => {
+  const ecs = buildEcs()
+  const app = await buildAppWithSkewRoutes(ecs)
+  t.after(() => app.close())
+
+  const res = await app.inject({ method: 'GET', url: '/ecs/gateway/gateways/my-cluster' })
+
+  assert.strictEqual(res.statusCode, 501)
+  const body = res.json()
+  assert.strictEqual(body.code, 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER')
+  assert.match(body.message, /ecs/)
+})
+
+test('PUT /ecs/gateway/httproutes/:scope returns 501 from ECS provider', async (t) => {
+  const ecs = buildEcs()
+  const app = await buildAppWithSkewRoutes(ecs)
+  t.after(() => app.close())
+
+  const res = await app.inject({
+    method: 'PUT',
+    url: '/ecs/gateway/httproutes/my-cluster',
+    headers: { 'content-type': 'application/json' },
+    body: { metadata: { name: 'x' } }
+  })
+
+  assert.strictEqual(res.statusCode, 501)
+  assert.strictEqual(res.json().code, 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER')
+})
+
+test('DELETE /ecs/gateway/httproutes/:scope/:name returns 501 from ECS provider', async (t) => {
+  const ecs = buildEcs()
+  const app = await buildAppWithSkewRoutes(ecs)
+  t.after(() => app.close())
+
+  const res = await app.inject({
+    method: 'DELETE',
+    url: '/ecs/gateway/httproutes/my-cluster/foo'
+  })
+
+  assert.strictEqual(res.statusCode, 501)
+  assert.strictEqual(res.json().code, 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER')
+})
