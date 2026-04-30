@@ -21,12 +21,12 @@ const controllerSchema = {
 }
 
 module.exports = async function routes (fastify) {
-  fastify.get('/controllers/:scope', {
+  fastify.get('/controllers/:namespace', {
     schema: {
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' }
+          namespace: { $ref: 'machinist#/definitions/namespace' }
         }
       },
       querystring: {
@@ -50,19 +50,19 @@ module.exports = async function routes (fastify) {
       }
     }
   }, async (request) => {
-    const { scope } = request.params
+    const { namespace } = request.params
     const { machineId } = request.query
 
-    const controllers = await fastify.provider.getControllers(scope, machineId)
+    const controllers = await fastify.provider.getControllers(namespace, machineId)
     return { controllers }
   })
 
-  fastify.get('/controllers/:scope/:name', {
+  fastify.get('/controllers/:namespace/:name', {
     schema: {
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' },
+          namespace: { $ref: 'machinist#/definitions/namespace' },
           name: { type: 'string' }
         }
       },
@@ -81,18 +81,18 @@ module.exports = async function routes (fastify) {
       }
     }
   }, async (request) => {
-    const { scope, name } = request.params
+    const { namespace, name } = request.params
     const providerMetadata = { ...request.query }
-    const controller = await fastify.provider.getController(scope, name, providerMetadata)
+    const controller = await fastify.provider.getController(namespace, name, providerMetadata)
     return { controller }
   })
 
-  fastify.post('/controllers/:scope/:name', {
+  fastify.post('/controllers/:namespace/:name', {
     schema: {
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' },
+          namespace: { $ref: 'machinist#/definitions/namespace' },
           name: { type: 'string' }
         }
       },
@@ -113,18 +113,18 @@ module.exports = async function routes (fastify) {
       }
     }
   }, async (request) => {
-    const { scope, name } = request.params
+    const { namespace, name } = request.params
     const { replicas } = request.body
     const providerMetadata = { ...request.query }
-    return fastify.provider.updateControllerReplicas(scope, name, replicas, providerMetadata)
+    return fastify.provider.updateControllerReplicas(namespace, name, replicas, providerMetadata)
   })
 
-  fastify.delete('/controllers/:scope/:name', {
+  fastify.delete('/controllers/:namespace/:name', {
     schema: {
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' },
+          namespace: { $ref: 'machinist#/definitions/namespace' },
           name: { type: 'string' }
         }
       },
@@ -134,8 +134,8 @@ module.exports = async function routes (fastify) {
       }
     }
   }, async (request) => {
-    const { scope, name } = request.params
+    const { namespace, name } = request.params
     const providerMetadata = { ...request.query }
-    return fastify.provider.deleteController(scope, name, providerMetadata)
+    return fastify.provider.deleteController(namespace, name, providerMetadata)
   })
 }

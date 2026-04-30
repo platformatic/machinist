@@ -4,18 +4,18 @@
 // abstraction when adding skew protection for non-K8s providers.
 
 module.exports = async function routes (fastify) {
-  fastify.get('/gateway/gateways/:scope', {
+  fastify.get('/gateway/gateways/:namespace', {
     schema: {
-      description: 'List Gateways in a scope',
+      description: 'List Gateways in a namespace',
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' }
+          namespace: { $ref: 'machinist#/definitions/namespace' }
         }
       }
     }
   }, async (request) => {
-    const { scope } = request.params
-    return fastify.provider.listGateways(scope)
+    const { namespace } = request.params
+    return fastify.provider.listGateways(namespace)
   })
 }

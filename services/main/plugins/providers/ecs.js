@@ -47,9 +47,9 @@ class Ecs {
 
   // ── Machine operations ──
 
-  async getMachine (scope, machineId) {
+  async getMachine (namespace, machineId) {
     const { tasks, failures } = await this.#ecs.send(new DescribeTasksCommand({
-      cluster: scope,
+      cluster: namespace,
       tasks: [machineId],
       include: ['TAGS']
     }))
@@ -64,7 +64,7 @@ class Ecs {
     return this.#formatMachine(tasks[0])
   }
 
-  async getMachines (scope, labels = {}) {
+  async getMachines (namespace, labels = {}) {
     const hasLabels = Object.keys(labels).length > 0
 
     let taskArns
@@ -72,16 +72,16 @@ class Ecs {
       taskArns = await this.#findResourcesByTags('ecs:task', labels)
       if (taskArns.length === 0) return []
     } else {
-      taskArns = await this.#listAllTaskArns(scope)
+      taskArns = await this.#listAllTaskArns(namespace)
       if (taskArns.length === 0) return []
     }
 
-    return this.#describeTasksBatched(scope, taskArns)
+    return this.#describeTasksBatched(namespace, taskArns)
   }
 
-  async setMachineLabels (scope, machineId, labels) {
+  async setMachineLabels (namespace, machineId, labels) {
     // machineId could be a short ID — resolve to full ARN
-    const arn = await this.#resolveTaskArn(scope, machineId)
+    const arn = await this.#resolveTaskArn(namespace, machineId)
 
     const tags = Object.entries(labels).map(([key, value]) => ({
       key, value
@@ -95,17 +95,17 @@ class Ecs {
 
   // ── Controller operations ──
 
-  async getControllers (scope, machineId) {
+  async getControllers (namespace, machineId) {
     if (machineId) {
-      const machine = await this.getMachine(scope, machineId)
+      const machine = await this.getMachine(namespace, machineId)
       if (!machine.controller) return []
 
-      const controller = await this.getController(scope, machine.controller.name)
+      const controller = await this.getController(namespace, machine.controller.name)
       return [controller]
     }
 
     // List all services in the cluster
-    const serviceArns = await this.#listAllServiceArns(scope)
+    const serviceArns = await this.#listAllServiceArns(namespace)
     if (serviceArns.length === 0) return []
 
     const controllers = []
@@ -113,7 +113,7 @@ class Ecs {
     for (let i = 0; i < serviceArns.length; i += 10) {
       const batch = serviceArns.slice(i, i + 10)
       const { services } = await this.#ecs.send(new DescribeServicesCommand({
-        cluster: scope,
+        cluster: namespace,
         services: batch,
         include: ['TAGS']
       }))
@@ -132,9 +132,9 @@ class Ecs {
     return controllers
   }
 
-  async getController (scope, name) {
+  async getController (namespace, name) {
     const { services, failures } = await this.#ecs.send(new DescribeServicesCommand({
-      cluster: scope,
+      cluster: namespace,
       services: [name],
       include: ['TAGS']
     }))
@@ -149,10 +149,10 @@ class Ecs {
     const svc = services[0]
 
     // Get tasks belonging to this service
-    const taskArns = await this.#listAllTaskArns(scope, name)
+    const taskArns = await this.#listAllTaskArns(namespace, name)
     let machines = []
     if (taskArns.length > 0) {
-      machines = await this.#describeTasksBatched(scope, taskArns)
+      machines = await this.#describeTasksBatched(namespace, taskArns)
     }
 
     return {
@@ -164,9 +164,9 @@ class Ecs {
     }
   }
 
-  async updateControllerReplicas (scope, name, replicaCount) {
+  async updateControllerReplicas (namespace, name, replicaCount) {
     const { service } = await this.#ecs.send(new UpdateServiceCommand({
-      cluster: scope,
+      cluster: namespace,
       service: name,
       desiredCount: replicaCount
     }))
@@ -179,9 +179,9 @@ class Ecs {
     }
   }
 
-  async deleteController (scope, name) {
+  async deleteController (namespace, name) {
     await this.#ecs.send(new DeleteServiceCommand({
-      cluster: scope,
+      cluster: namespace,
       service: name,
       force: true
     }))
@@ -189,7 +189,7 @@ class Ecs {
 
   // ── Service operations ──
 
-  async getServicesByLabels (scope, labels) {
+  async getServicesByLabels (namespace, labels) {
     const serviceArns = await this.#findResourcesByTags('ecs:service', labels)
     if (serviceArns.length === 0) return []
 
@@ -197,7 +197,7 @@ class Ecs {
     for (let i = 0; i < serviceArns.length; i += 10) {
       const batch = serviceArns.slice(i, i + 10)
       const { services } = await this.#ecs.send(new DescribeServicesCommand({
-        cluster: scope,
+        cluster: namespace,
         services: batch,
         include: ['TAGS']
       }))
@@ -210,13 +210,13 @@ class Ecs {
     return result
   }
 
-  async deleteService (scope, name) {
+  async deleteService (namespace, name) {
     // In ECS, the "service" and the "controller" are the same resource.
     // deleteController already handles this. This method exists for
     // interface compatibility — e.g., when icc-3 deletes a K8s Service
     // (networking resource) separately from a Deployment.
     // For ECS it's a no-op since deleteController already removed everything.
-    this.log.debug({ scope, name }, 'deleteService is a no-op for ECS (handled by deleteController)')
+    this.log.debug({ namespace, name }, 'deleteService is a no-op for ECS (handled by deleteController)')
   }
 
   // ── Skew protection ──
@@ -319,13 +319,13 @@ class Ecs {
     return parts[parts.length - 1]
   }
 
-  async #resolveTaskArn (scope, machineId) {
+  async #resolveTaskArn (namespace, machineId) {
     // If already an ARN, return as-is
     if (machineId.startsWith('arn:')) return machineId
 
     // Otherwise describe to get the full ARN
     const { tasks } = await this.#ecs.send(new DescribeTasksCommand({
-      cluster: scope,
+      cluster: namespace,
       tasks: [machineId]
     }))
 
@@ -338,12 +338,12 @@ class Ecs {
     return tasks[0].taskArn
   }
 
-  async #listAllTaskArns (scope, serviceName) {
+  async #listAllTaskArns (namespace, serviceName) {
     const allArns = []
     let nextToken
 
     do {
-      const params = { cluster: scope, maxResults: 100, nextToken }
+      const params = { cluster: namespace, maxResults: 100, nextToken }
       if (serviceName) params.serviceName = serviceName
 
       const result = await this.#ecs.send(new ListTasksCommand(params))
@@ -354,13 +354,13 @@ class Ecs {
     return allArns
   }
 
-  async #listAllServiceArns (scope) {
+  async #listAllServiceArns (namespace) {
     const allArns = []
     let nextToken
 
     do {
       const result = await this.#ecs.send(new ListServicesCommand({
-        cluster: scope,
+        cluster: namespace,
         maxResults: 100,
         nextToken
       }))
@@ -371,14 +371,14 @@ class Ecs {
     return allArns
   }
 
-  async #describeTasksBatched (scope, taskArns) {
+  async #describeTasksBatched (namespace, taskArns) {
     const machines = []
 
     // DescribeTasks accepts max 100 at a time
     for (let i = 0; i < taskArns.length; i += 100) {
       const batch = taskArns.slice(i, i + 100)
       const { tasks } = await this.#ecs.send(new DescribeTasksCommand({
-        cluster: scope,
+        cluster: namespace,
         tasks: batch,
         include: ['TAGS']
       }))

@@ -41,37 +41,37 @@ class K8s {
 
   // ── Machine operations ──
 
-  async getMachine (scope, machineId) {
-    const pod = await this.apiClient.request(`/api/v1/namespaces/${scope}/pods/${machineId}`)
+  async getMachine (namespace, machineId) {
+    const pod = await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods/${machineId}`)
 
     const owner = pod.metadata?.ownerReferences?.find(ref => ref.controller)
     if (owner) {
       pod._resolvedController = await this.#resolveTopController(
-        scope, owner.name, owner.apiVersion, owner.kind
+        namespace, owner.name, owner.apiVersion, owner.kind
       )
     }
 
     return this.#formatMachine(pod)
   }
 
-  async getMachines (scope, labels = {}) {
+  async getMachines (namespace, labels = {}) {
     const labelSelector = querystring.stringify(labels)
-    const endpoint = `/api/v1/namespaces/${scope}/pods?labelSelector=${labelSelector}`
+    const endpoint = `/api/v1/namespaces/${namespace}/pods?labelSelector=${labelSelector}`
     const { items } = await this.apiClient.request(endpoint)
 
     return Promise.all(items.map(async pod => {
       const owner = pod.metadata?.ownerReferences?.find(ref => ref.controller)
       if (owner) {
         pod._resolvedController = await this.#resolveTopController(
-          scope, owner.name, owner.apiVersion, owner.kind
+          namespace, owner.name, owner.apiVersion, owner.kind
         )
       }
       return this.#formatMachine(pod)
     }))
   }
 
-  async setMachineLabels (scope, machineId, labels) {
-    await this.apiClient.request(`/api/v1/namespaces/${scope}/pods/${machineId}`, {
+  async setMachineLabels (namespace, machineId, labels) {
+    await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods/${machineId}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/strategic-merge-patch+json'
@@ -82,12 +82,12 @@ class K8s {
 
   // ── Controller operations ──
 
-  async getControllers (scope, machineId) {
+  async getControllers (namespace, machineId) {
     let machines = []
     if (machineId) {
-      machines.push(await this.getMachine(scope, machineId))
+      machines.push(await this.getMachine(namespace, machineId))
     } else {
-      machines = await this.getMachines(scope)
+      machines = await this.getMachines(namespace)
     }
 
     const controllersMap = {}
@@ -100,7 +100,7 @@ class K8s {
       if (controllersMap[name]) {
         controllersMap[name].machines.push(machine)
       } else {
-        const raw = await this.#getRawController(scope, name, apiVersion, kind)
+        const raw = await this.#getRawController(namespace, name, apiVersion, kind)
         controllersMap[name] = {
           name,
           replicas: raw.spec?.replicas,
@@ -114,12 +114,12 @@ class K8s {
     return Object.values(controllersMap)
   }
 
-  async getController (scope, name, providerMetadata) {
+  async getController (namespace, name, providerMetadata) {
     const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
-    const raw = await this.#getRawController(scope, name, apiVersion, kind)
+    const raw = await this.#getRawController(namespace, name, apiVersion, kind)
 
     const matchLabels = raw.spec?.selector?.matchLabels || {}
-    const machines = await this.getMachines(scope, matchLabels)
+    const machines = await this.getMachines(namespace, matchLabels)
 
     return {
       name,
@@ -130,13 +130,13 @@ class K8s {
     }
   }
 
-  async updateControllerReplicas (scope, name, replicaCount, providerMetadata) {
+  async updateControllerReplicas (namespace, name, replicaCount, providerMetadata) {
     const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
-    const raw = await this.#getRawController(scope, name, apiVersion, kind)
+    const raw = await this.#getRawController(namespace, name, apiVersion, kind)
 
     raw.spec.replicas = replicaCount
 
-    const controllerPath = this.#createControllerPath(scope, name, apiVersion, kind)
+    const controllerPath = this.#createControllerPath(namespace, name, apiVersion, kind)
     const updated = await this.apiClient.request(controllerPath, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -151,41 +151,41 @@ class K8s {
     }
   }
 
-  async deleteController (scope, name, providerMetadata) {
+  async deleteController (namespace, name, providerMetadata) {
     const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
-    const controllerPath = this.#createControllerPath(scope, name, apiVersion, kind)
+    const controllerPath = this.#createControllerPath(namespace, name, apiVersion, kind)
     return this.apiClient.request(controllerPath, { method: 'DELETE' })
   }
 
   // ── Service operations ──
 
-  async getServicesByLabels (scope, labels) {
+  async getServicesByLabels (namespace, labels) {
     const parts = []
     for (const [k, v] of Object.entries(labels)) {
       parts.push(`${k}=${v}`)
     }
     const labelSelector = parts.join(',')
-    const path = `/api/v1/namespaces/${scope}/services?labelSelector=${labelSelector}`
+    const path = `/api/v1/namespaces/${namespace}/services?labelSelector=${labelSelector}`
     const { items } = await this.apiClient.request(path)
     return items.map(this.#formatServiceEndpoint)
   }
 
-  async deleteService (scope, name) {
-    const path = `/api/v1/namespaces/${scope}/services/${name}`
+  async deleteService (namespace, name) {
+    const path = `/api/v1/namespaces/${namespace}/services/${name}`
     return this.apiClient.request(path, { method: 'DELETE' })
   }
 
   // ── Skew protection (K8s only) ──
 
-  async listGateways (scope) {
-    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${scope}/gateways`
+  async listGateways (namespace) {
+    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/gateways`
     const { items } = await this.apiClient.request(path)
     return items
   }
 
-  async applyHTTPRoute (scope, httpRoute) {
+  async applyHTTPRoute (namespace, httpRoute) {
     const name = httpRoute.metadata.name
-    const basePath = `/apis/gateway.networking.k8s.io/v1/namespaces/${scope}/httproutes`
+    const basePath = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/httproutes`
 
     let existing
     try {
@@ -208,8 +208,8 @@ class K8s {
     })
   }
 
-  async deleteHTTPRoute (scope, name) {
-    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${scope}/httproutes/${name}`
+  async deleteHTTPRoute (namespace, name) {
+    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/httproutes/${name}`
     return this.apiClient.request(path, { method: 'DELETE' })
   }
 
@@ -258,8 +258,8 @@ class K8s {
    * The kind/apiVersion at each level comes from the ownerReference itself
    * (K8s populates it for free), so no discovery is needed here.
    */
-  async #resolveTopController (scope, name, apiVersion, kind) {
-    const controllerPath = this.#createControllerPath(scope, name, apiVersion, kind)
+  async #resolveTopController (namespace, name, apiVersion, kind) {
+    const controllerPath = this.#createControllerPath(namespace, name, apiVersion, kind)
     const controller = await this.apiClient.request(controllerPath)
 
     if (!controller.name) {
@@ -272,7 +272,7 @@ class K8s {
     if (parentController) {
       try {
         return this.#resolveTopController(
-          scope, parentController.name, parentController.apiVersion, parentController.kind
+          namespace, parentController.name, parentController.apiVersion, parentController.kind
         )
       } catch (err) {
         this.log.warn({ err }, 'Unable to get parent controller')
@@ -300,17 +300,17 @@ class K8s {
     return { kind: providerMetadata.kind, apiVersion: providerMetadata.apiVersion }
   }
 
-  async #getRawController (scope, name, apiVersion, kind) {
-    const path = this.#createControllerPath(scope, name, apiVersion, kind)
+  async #getRawController (namespace, name, apiVersion, kind) {
+    const path = this.#createControllerPath(namespace, name, apiVersion, kind)
     return this.apiClient.request(path)
   }
 
-  #createControllerPath (scope, name, apiVersion, kind) {
+  #createControllerPath (namespace, name, apiVersion, kind) {
     const kindPart = pluralize(kind.toLowerCase())
     const root = apiVersion.split('/').length > 1
       ? `/apis/${apiVersion}`
       : `/api/${apiVersion}`
-    return `${root}/namespaces/${scope}/${kindPart}/${name}`
+    return `${root}/namespaces/${namespace}/${kindPart}/${name}`
   }
 }
 

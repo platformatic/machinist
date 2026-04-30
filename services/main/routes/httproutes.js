@@ -4,13 +4,13 @@
 // abstraction when adding skew protection for non-K8s providers.
 
 module.exports = async function routes (fastify) {
-  fastify.put('/gateway/httproutes/:scope', {
+  fastify.put('/gateway/httproutes/:namespace', {
     schema: {
       description: 'Create or update an HTTPRoute',
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' }
+          namespace: { $ref: 'machinist#/definitions/namespace' }
         }
       },
       body: {
@@ -18,23 +18,23 @@ module.exports = async function routes (fastify) {
       }
     }
   }, async (request) => {
-    const { scope } = request.params
-    return fastify.provider.applyHTTPRoute(scope, request.body)
+    const { namespace } = request.params
+    return fastify.provider.applyHTTPRoute(namespace, request.body)
   })
 
-  fastify.delete('/gateway/httproutes/:scope/:name', {
+  fastify.delete('/gateway/httproutes/:namespace/:name', {
     schema: {
       description: 'Delete an HTTPRoute',
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' },
+          namespace: { $ref: 'machinist#/definitions/namespace' },
           name: { type: 'string' }
         }
       }
     }
   }, async (request) => {
-    const { scope, name } = request.params
-    return fastify.provider.deleteHTTPRoute(scope, name)
+    const { namespace, name } = request.params
+    return fastify.provider.deleteHTTPRoute(namespace, name)
   })
 }

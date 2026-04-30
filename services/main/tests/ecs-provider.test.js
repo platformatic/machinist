@@ -28,7 +28,7 @@ function mockTask (overrides = {}) {
 
 function createMockProvider (overrides = {}) {
   return {
-    async getMachine (scope, machineId) {
+    async getMachine (namespace, machineId) {
       return {
         id: machineId,
         status: 'RUNNING',
@@ -39,7 +39,7 @@ function createMockProvider (overrides = {}) {
         resources: { limits: { cpu: '256', memory: '512' }, requests: { cpu: '256', memory: '512' } }
       }
     },
-    async getMachines (scope, labels) {
+    async getMachines (namespace, labels) {
       return [{
         id: 'abc123',
         status: 'RUNNING',
@@ -51,7 +51,7 @@ function createMockProvider (overrides = {}) {
       }]
     },
     async setMachineLabels () {},
-    async getControllers (scope, machineId) {
+    async getControllers (namespace, machineId) {
       return [{
         name: 'my-service',
         replicas: 3,
@@ -67,7 +67,7 @@ function createMockProvider (overrides = {}) {
         }]
       }]
     },
-    async getController (scope, name) {
+    async getController (namespace, name) {
       return {
         name,
         replicas: 3,
@@ -83,11 +83,11 @@ function createMockProvider (overrides = {}) {
         }]
       }
     },
-    async updateControllerReplicas (scope, name, replicas) {
+    async updateControllerReplicas (namespace, name, replicas) {
       return { name, replicas, labels: {}, providerMetadata: {} }
     },
     async deleteController () {},
-    async getServicesByLabels (scope, labels) {
+    async getServicesByLabels (namespace, labels) {
       return [{
         name: 'my-service',
         labels: { 'app.kubernetes.io/name': 'myapp' },
@@ -173,7 +173,7 @@ async function buildApp (provider) {
   return app
 }
 
-test('GET /ecs/machines/:scope/:id returns machine', async (t) => {
+test('GET /ecs/machines/:namespace/:id returns machine', async (t) => {
   const app = await buildApp(createMockProvider())
   t.after(() => app.close())
 
@@ -190,7 +190,7 @@ test('GET /ecs/machines/:scope/:id returns machine', async (t) => {
   assert.strictEqual(body.controller.name, 'my-service')
 })
 
-test('GET /ecs/machines/:scope with labels returns machines', async (t) => {
+test('GET /ecs/machines/:namespace with labels returns machines', async (t) => {
   const app = await buildApp(createMockProvider())
   t.after(() => app.close())
 
@@ -206,11 +206,11 @@ test('GET /ecs/machines/:scope with labels returns machines', async (t) => {
   assert.strictEqual(machines[0].id, 'abc123')
 })
 
-test('PATCH /ecs/machines/:scope/:id/labels sets labels', async (t) => {
+test('PATCH /ecs/machines/:namespace/:id/labels sets labels', async (t) => {
   let calledWith = null
   const provider = createMockProvider({
-    async setMachineLabels (scope, id, labels) {
-      calledWith = { scope, id, labels }
+    async setMachineLabels (namespace, id, labels) {
+      calledWith = { namespace, id, labels }
     }
   })
   const app = await buildApp(provider)
@@ -225,13 +225,13 @@ test('PATCH /ecs/machines/:scope/:id/labels sets labels', async (t) => {
 
   assert.strictEqual(res.statusCode, 200)
   assert.deepStrictEqual(calledWith, {
-    scope: 'my-cluster',
+    namespace: 'my-cluster',
     id: 'abc123',
     labels: { foo: 'bar' }
   })
 })
 
-test('GET /ecs/controllers/:scope with machineId returns controllers', async (t) => {
+test('GET /ecs/controllers/:namespace with machineId returns controllers', async (t) => {
   const app = await buildApp(createMockProvider())
   t.after(() => app.close())
 
@@ -247,7 +247,7 @@ test('GET /ecs/controllers/:scope with machineId returns controllers', async (t)
   assert.strictEqual(controllers[0].replicas, 3)
 })
 
-test('GET /ecs/controllers/:scope/:name returns controller with machines', async (t) => {
+test('GET /ecs/controllers/:namespace/:name returns controller with machines', async (t) => {
   const app = await buildApp(createMockProvider())
   t.after(() => app.close())
 
@@ -263,7 +263,7 @@ test('GET /ecs/controllers/:scope/:name returns controller with machines', async
   assert.strictEqual(controller.machines.length, 1)
 })
 
-test('POST /ecs/controllers/:scope/:name updates replicas', async (t) => {
+test('POST /ecs/controllers/:namespace/:name updates replicas', async (t) => {
   const app = await buildApp(createMockProvider())
   t.after(() => app.close())
 
@@ -278,7 +278,7 @@ test('POST /ecs/controllers/:scope/:name updates replicas', async (t) => {
   assert.strictEqual(res.json().replicas, 5)
 })
 
-test('DELETE /ecs/controllers/:scope/:name deletes controller', async (t) => {
+test('DELETE /ecs/controllers/:namespace/:name deletes controller', async (t) => {
   let deleted = false
   const provider = createMockProvider({
     async deleteController () { deleted = true }
@@ -295,7 +295,7 @@ test('DELETE /ecs/controllers/:scope/:name deletes controller', async (t) => {
   assert.strictEqual(deleted, true)
 })
 
-test('GET /ecs/services/:scope with labels returns service endpoints', async (t) => {
+test('GET /ecs/services/:namespace with labels returns service endpoints', async (t) => {
   const app = await buildApp(createMockProvider())
   t.after(() => app.close())
 
@@ -311,7 +311,7 @@ test('GET /ecs/services/:scope with labels returns service endpoints', async (t)
   assert.strictEqual(services[0].ports[0].port, 8080)
 })
 
-test('GET /ecs/services/:scope without labels returns 400', async (t) => {
+test('GET /ecs/services/:namespace without labels returns 400', async (t) => {
   const app = await buildApp(createMockProvider())
   t.after(() => app.close())
 
@@ -323,7 +323,7 @@ test('GET /ecs/services/:scope without labels returns 400', async (t) => {
   assert.strictEqual(res.statusCode, 400)
 })
 
-test('DELETE /ecs/services/:scope/:name is a no-op for ECS', async (t) => {
+test('DELETE /ecs/services/:namespace/:name is a no-op for ECS', async (t) => {
   let called = false
   const provider = createMockProvider({
     async deleteService () { called = true }
@@ -398,7 +398,7 @@ async function buildAppWithSkewRoutes (provider) {
   return app
 }
 
-test('GET /ecs/gateway/gateways/:scope returns 501 from ECS provider', async (t) => {
+test('GET /ecs/gateway/gateways/:namespace returns 501 from ECS provider', async (t) => {
   const ecs = buildEcs()
   const app = await buildAppWithSkewRoutes(ecs)
   t.after(() => app.close())
@@ -411,7 +411,7 @@ test('GET /ecs/gateway/gateways/:scope returns 501 from ECS provider', async (t)
   assert.match(body.message, /ecs/)
 })
 
-test('PUT /ecs/gateway/httproutes/:scope returns 501 from ECS provider', async (t) => {
+test('PUT /ecs/gateway/httproutes/:namespace returns 501 from ECS provider', async (t) => {
   const ecs = buildEcs()
   const app = await buildAppWithSkewRoutes(ecs)
   t.after(() => app.close())
@@ -427,7 +427,7 @@ test('PUT /ecs/gateway/httproutes/:scope returns 501 from ECS provider', async (
   assert.strictEqual(res.json().code, 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER')
 })
 
-test('DELETE /ecs/gateway/httproutes/:scope/:name returns 501 from ECS provider', async (t) => {
+test('DELETE /ecs/gateway/httproutes/:namespace/:name returns 501 from ECS provider', async (t) => {
   const ecs = buildEcs()
   const app = await buildAppWithSkewRoutes(ecs)
   t.after(() => app.close())

@@ -7,7 +7,7 @@ module.exports = fp(function (fastify, opts, done) {
     $id: 'machinist',
     type: 'object',
     definitions: {
-      scope: { type: 'string' },
+      namespace: { type: 'string' },
       machineId: { type: 'string' }
     }
   })

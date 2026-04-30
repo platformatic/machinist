@@ -22,12 +22,12 @@ const serviceEndpointSchema = {
 }
 
 module.exports = async function routes (fastify) {
-  fastify.get('/services/:scope', {
+  fastify.get('/services/:namespace', {
     schema: {
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' }
+          namespace: { $ref: 'machinist#/definitions/namespace' }
         }
       },
       querystring: {
@@ -48,7 +48,7 @@ module.exports = async function routes (fastify) {
       }
     }
   }, async (request) => {
-    const { scope } = request.params
+    const { namespace } = request.params
     const labelEntries = request.query.labels || []
 
     const labels = {}
@@ -57,21 +57,21 @@ module.exports = async function routes (fastify) {
       labels[key] = value
     }
 
-    return fastify.provider.getServicesByLabels(scope, labels)
+    return fastify.provider.getServicesByLabels(namespace, labels)
   })
 
-  fastify.delete('/services/:scope/:name', {
+  fastify.delete('/services/:namespace/:name', {
     schema: {
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' },
+          namespace: { $ref: 'machinist#/definitions/namespace' },
           name: { type: 'string' }
         }
       }
     }
   }, async (request) => {
-    const { scope, name } = request.params
-    return fastify.provider.deleteService(scope, name)
+    const { namespace, name } = request.params
+    return fastify.provider.deleteService(namespace, name)
   })
 }

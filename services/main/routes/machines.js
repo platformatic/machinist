@@ -1,12 +1,12 @@
 'use strict'
 
 module.exports = async function routes (fastify) {
-  fastify.get('/machines/:scope/:id', {
+  fastify.get('/machines/:namespace/:id', {
     schema: {
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' },
+          namespace: { $ref: 'machinist#/definitions/namespace' },
           id: { $ref: 'machinist#/definitions/machineId' }
         }
       },
@@ -15,16 +15,16 @@ module.exports = async function routes (fastify) {
       }
     }
   }, async (request) => {
-    const { scope, id } = request.params
-    return fastify.provider.getMachine(scope, id)
+    const { namespace, id } = request.params
+    return fastify.provider.getMachine(namespace, id)
   })
 
-  fastify.get('/machines/:scope', {
+  fastify.get('/machines/:namespace', {
     schema: {
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' }
+          namespace: { $ref: 'machinist#/definitions/namespace' }
         }
       },
       querystring: {
@@ -38,7 +38,7 @@ module.exports = async function routes (fastify) {
       }
     }
   }, async (request) => {
-    const { scope } = request.params
+    const { namespace } = request.params
     const labelEntries = request.query.labels || []
 
     const labels = {}
@@ -47,15 +47,15 @@ module.exports = async function routes (fastify) {
       labels[key] = value
     }
 
-    return fastify.provider.getMachines(scope, labels)
+    return fastify.provider.getMachines(namespace, labels)
   })
 
-  fastify.patch('/machines/:scope/:id/labels', {
+  fastify.patch('/machines/:namespace/:id/labels', {
     schema: {
       params: {
         type: 'object',
         properties: {
-          scope: { $ref: 'machinist#/definitions/scope' },
+          namespace: { $ref: 'machinist#/definitions/namespace' },
           id: { $ref: 'machinist#/definitions/machineId' }
         }
       },
@@ -70,10 +70,10 @@ module.exports = async function routes (fastify) {
       }
     }
   }, async (request) => {
-    const { scope, id } = request.params
+    const { namespace, id } = request.params
     const { labels } = request.body
 
-    await fastify.provider.setMachineLabels(scope, id, labels)
+    await fastify.provider.setMachineLabels(namespace, id, labels)
     return { labels }
   })
 }

@@ -11,7 +11,7 @@ before(async () => {
   await applyYaml(deploymentFixture)
 })
 
-test('get all controllers in a scope', async t => {
+test('get all controllers in a namespace', async t => {
   const { app } = await bootstrap(t)
 
   const result = await app.inject({
