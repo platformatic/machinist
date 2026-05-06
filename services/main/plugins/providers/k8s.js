@@ -344,7 +344,7 @@ async function plugin (fastify, opts) {
 }
 
 module.exports = fp(plugin, {
-  name: 'provider',
+  name: 'provider-k8s',
   dependencies: ['app-configuration']
 })
 

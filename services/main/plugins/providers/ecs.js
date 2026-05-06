@@ -435,7 +435,7 @@ async function plugin (fastify, opts) {
 }
 
 module.exports = fp(plugin, {
-  name: 'provider',
+  name: 'provider-ecs',
   dependencies: ['app-configuration']
 })
 
