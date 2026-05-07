@@ -20,6 +20,7 @@ module.exports.NonExistentHost = createError('MCHNST_NONEXISTENT_HOST', 'Host do
 module.exports.NonExistentHpa = createError('MCHNST_NONEXISTENT_HPA', 'HPA does not exist: %s', 404)
 module.exports.NonExistentIngress = createError('MCHNST_NONEXISTENT_INGRESS', 'Ingress does not exist: %s', 404)
 module.exports.NonExistentVolume = createError('MCHNST_NONEXISTENT_VOLUME', 'Volume does not exist: %s', 404)
+module.exports.NotImplementedByProvider = createError('MCHNST_NOT_IMPLEMENTED_BY_PROVIDER', '%s is not supported by the %s provider', 501)
 module.exports.UnknownProvider = createError('MCHNST_UNKNOWN_PROVIDER', 'Unknown provider: %s', 400)
 module.exports.VolumeAttached = createError('MCHNST_VOLUME_ATTACHED', '%s', 400)
 module.exports.VolumeCannotBeReplaced = createError('MCHNST_VOLUME_CANNOT_REPLACE', 'Volume cannot be replaced: %s', 400)

@@ -16,51 +16,67 @@ test('get all controllers in a namespace', async t => {
 
   const result = await app.inject({
     method: 'GET',
-    url: '/controllers/default',
+    url: '/k8s/controllers/default',
     headers: { 'content-type': 'application/json' }
   })
 
   assert.strictEqual(result.statusCode, 200, result.json())
 
-  // Only look for the controller(s) in the fixture
   const controller = result.json().controllers
     .find(c => c.name === 'nginx-echo-server-deployment-controller')
-  assert.strictEqual(controller.kind, 'Deployment')
-  assert(controller.pods.length >= controller.replicas)
+  assert.ok(controller)
+  assert(controller.machines.length >= controller.replicas)
+  // Discovery via ownerReferences should populate providerMetadata.
+  assert.strictEqual(controller.providerMetadata.kind, 'Deployment')
+  assert.strictEqual(controller.providerMetadata.apiVersion, 'apps/v1')
 })
 
-test('get controller from a pod', async t => {
+test('get controller from a machine', async t => {
   const { app } = await bootstrap(t)
   const { items } = await getPods({ 'app.kubernetes.io/instance': 'deployment-fixture-controller' })
   const podName = items[0].metadata.name
 
   const result = await app.inject({
     method: 'GET',
-    url: `/controllers/default?podId=${podName}`,
+    url: `/k8s/controllers/default?machineId=${podName}`,
     headers: { 'content-type': 'application/json' }
   })
 
   assert.strictEqual(result.statusCode, 200)
 
   const [controller] = result.json().controllers
-  assert.strictEqual(controller.kind, 'Deployment')
   assert.strictEqual(controller.name, 'nginx-echo-server-deployment-controller')
-  assert(controller.pods.length >= controller.replicas)
+  assert(controller.machines.length >= controller.replicas)
 })
 
-test('get controller from controller', async t => {
+test('get controller by name with providerMetadata', async t => {
   const { app } = await bootstrap(t)
 
   const result = await app.inject({
     method: 'GET',
-    url: '/controllers/default/nginx-echo-server-deployment-controller?apiVersion=apps%2Fv1&kind=Deployment',
+    url: '/k8s/controllers/default/nginx-echo-server-deployment-controller',
+    query: { kind: 'Deployment', apiVersion: 'apps/v1' },
     headers: { 'content-type': 'application/json' }
   })
 
   assert.strictEqual(result.statusCode, 200)
 
   const { controller } = result.json()
-  assert.strictEqual(controller.kind, 'Deployment')
   assert.strictEqual(controller.name, 'nginx-echo-server-deployment-controller')
-  assert(controller.pods.length >= controller.replicas)
+  assert(controller.machines.length >= controller.replicas)
+  assert.strictEqual(controller.providerMetadata.kind, 'Deployment')
+  assert.strictEqual(controller.providerMetadata.apiVersion, 'apps/v1')
+})
+
+test('get controller by name without providerMetadata returns 500', async t => {
+  const { app } = await bootstrap(t)
+
+  const result = await app.inject({
+    method: 'GET',
+    url: '/k8s/controllers/default/nginx-echo-server-deployment-controller',
+    headers: { 'content-type': 'application/json' }
+  })
+
+  // K8s provider rejects the call because kind/apiVersion are required.
+  assert.strictEqual(result.statusCode, 500)
 })

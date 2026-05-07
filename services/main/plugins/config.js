@@ -7,11 +7,7 @@ const deepmerge = require('@fastify/deepmerge')({ all: true })
 const baseSchema = {
   type: 'object',
   properties: {
-    // Required when PLT_DISABLE_EVENT_EXPORT is false
-    PLT_LOG_PROXY_URL: { type: 'string' },
-    PLT_K8S_PROVIDER: { type: 'string', default: 'k8s' },
-    PLT_DISABLE_EVENT_EXPORT: { type: 'boolean', default: false },
-    PLT_K8S_INSTALLED_NAMESPACE: { type: 'string', default: 'platformatic' }
+    PLT_PROVIDER: { type: 'string', default: 'k8s' }
   }
 }
 

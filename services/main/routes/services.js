@@ -1,13 +1,33 @@
 'use strict'
 
+const serviceEndpointSchema = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    labels: {
+      type: 'object',
+      additionalProperties: { type: 'string' }
+    },
+    ports: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          port: { type: 'number' },
+          protocol: { type: 'string' }
+        }
+      }
+    }
+  }
+}
+
 module.exports = async function routes (fastify) {
   fastify.get('/services/:namespace', {
     schema: {
-      description: 'Get services by metadata labels',
       params: {
         type: 'object',
         properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' }
+          namespace: { $ref: 'machinist#/definitions/namespace' }
         }
       },
       querystring: {
@@ -19,9 +39,15 @@ module.exports = async function routes (fastify) {
           }
         },
         required: ['labels']
+      },
+      response: {
+        200: {
+          type: 'array',
+          items: serviceEndpointSchema
+        }
       }
     }
-  }, async (request, reply) => {
+  }, async (request) => {
     const { namespace } = request.params
     const labelEntries = request.query.labels || []
 
@@ -31,22 +57,21 @@ module.exports = async function routes (fastify) {
       labels[key] = value
     }
 
-    return fastify.k8s.getServicesByLabels(namespace, labels)
+    return fastify.provider.getServicesByLabels(namespace, labels)
   })
 
   fastify.delete('/services/:namespace/:name', {
     schema: {
-      description: 'Delete a Service',
       params: {
         type: 'object',
         properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' },
+          namespace: { $ref: 'machinist#/definitions/namespace' },
           name: { type: 'string' }
         }
       }
     }
-  }, async (request, reply) => {
+  }, async (request) => {
     const { namespace, name } = request.params
-    return fastify.k8s.deleteService(namespace, name)
+    return fastify.provider.deleteService(namespace, name)
   })
 }

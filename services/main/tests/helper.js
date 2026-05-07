@@ -16,24 +16,10 @@ const K8sClient = require('../lib/k8s-client')
 const CLUSTER_CONTEXT_NAME = 'k3d-plt-machinist-test'
 
 const defaultEnv = {
-  PLT_MACHINIST_DEFAULT_VOLUME_SIZE_GB: 3,
-  PLT_MACHINIST_VAULT_ADDR: 'http://vault.local',
-  PLT_MACHINIST_VAULT_NAMESPACE: 'plt',
-  PLT_MACHINIST_VAULT_ROLE_ID: 'role',
-  PLT_MACHINIST_VAULT_SECRET_ID: 'secret',
-  PLT_MACHINIST_CA_NAME: 'ca',
-  PLT_MACHINIST_PKI_ROLE: 'pkirole',
-  PLT_MACHINIST_COMMON_NAME: 'commonname',
-  PLT_MACHINIST_DISABLE_MTLS_CLIENT: 'true',
-  PLT_DEFAULT_MACHINE_MEMORY_MB: 256,
-  PLT_DEFAULT_MACHINE_CPU_COUNT: 1,
-  PLT_K8S_PROVIDER: 'k8s',
+  PLT_PROVIDER: 'k8s',
   PLT_K8S_REST_API_URL: 'http://k8s.api',
   PLT_K8S_ALLOW_SELFSIGNED_CERT: true,
-  PLT_K8S_MACHINE_WAIT_TIMEOUT_MS: 1000,
-  PLT_DISABLE_EVENT_EXPORT: true,
-  PLT_K8S_NAMESPACE: 'default',
-  PLT_LOG_PROXY_URL: 'http://localhost:3045'
+  PLT_K8S_NAMESPACE: 'default'
 }
 
 function config (options) {

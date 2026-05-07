@@ -22,52 +22,57 @@ before(async () => {
 test('update replica count for controller', async t => {
   const { app } = await bootstrap(t)
 
-  // Deployments
+  // Deployment
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-deployment-controller-updates?apiVersion=apps%2Fv1&kind=Deployment',
+      url: '/k8s/controllers/default/nginx-echo-server-deployment-controller-updates',
+      query: { kind: 'Deployment', apiVersion: 'apps/v1' },
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ replicaCount: 7 })
+      body: JSON.stringify({ replicas: 7 })
+    })
+
+    assert.strictEqual(result.statusCode, 200)
+    assert.strictEqual(result.json().replicas, 7)
+    assert.strictEqual(result.json().providerMetadata.kind, 'Deployment')
+  }
+
+  // ReplicaSet
+  {
+    const result = await app.inject({
+      method: 'POST',
+      url: '/k8s/controllers/default/nginx-echo-server-replicaset-controller-updates',
+      query: { kind: 'ReplicaSet', apiVersion: 'apps/v1' },
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ replicas: 7 })
     })
 
     assert.strictEqual(result.statusCode, 200)
     assert.strictEqual(result.json().replicas, 7)
   }
 
-  // ReplicaSets
+  // ReplicationController
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-replicaset-controller-updates?apiVersion=apps%2Fv1&kind=ReplicaSet',
+      url: '/k8s/controllers/default/nginx-echo-server-replicationcontroller-controller-updates',
+      query: { kind: 'ReplicationController', apiVersion: 'v1' },
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ replicaCount: 7 })
+      body: JSON.stringify({ replicas: 7 })
     })
 
     assert.strictEqual(result.statusCode, 200)
     assert.strictEqual(result.json().replicas, 7)
   }
 
-  // ReplicationControllers
+  // StatefulSet
   {
     const result = await app.inject({
       method: 'POST',
-      url: '/controllers/default/nginx-echo-server-replicationcontroller-controller-updates?apiVersion=v1&kind=ReplicationController',
+      url: '/k8s/controllers/default/nginx-echo-server-statefulset-controller-updates',
+      query: { kind: 'StatefulSet', apiVersion: 'apps/v1' },
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ replicaCount: 7 })
-    })
-
-    assert.strictEqual(result.statusCode, 200)
-    assert.strictEqual(result.json().replicas, 7)
-  }
-
-  // StatefulSets
-  {
-    const result = await app.inject({
-      method: 'POST',
-      url: '/controllers/default/nginx-echo-server-statefulset-controller-updates?apiVersion=apps%2Fv1&kind=StatefulSet',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ replicaCount: 7 })
+      body: JSON.stringify({ replicas: 7 })
     })
 
     assert.strictEqual(result.statusCode, 200)
@@ -75,15 +80,31 @@ test('update replica count for controller', async t => {
   }
 })
 
+test('update without providerMetadata returns 500', async t => {
+  const { app } = await bootstrap(t)
+
+  const result = await app.inject({
+    method: 'POST',
+    url: '/k8s/controllers/default/nginx-echo-server-deployment-controller-updates',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ replicas: 7 })
+  })
+
+  // K8s provider rejects the call because kind/apiVersion are required.
+  assert.strictEqual(result.statusCode, 500)
+})
+
 test('fail to update when no controller found', async t => {
   const { app } = await bootstrap(t)
 
   const result = await app.inject({
     method: 'POST',
-    url: '/controllers/default/unknown-controller?apiVersion=apps%2Fv1&kind=Deployment',
+    url: '/k8s/controllers/default/unknown-controller',
+    query: { kind: 'Deployment', apiVersion: 'apps/v1' },
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ replicaCount: 7 })
+    body: JSON.stringify({ replicas: 7 })
   })
 
+  // K8sClient now passes the 404 from K8s API through with statusCode 404
   assert.strictEqual(result.statusCode, 404)
 })

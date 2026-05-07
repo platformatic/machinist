@@ -19,7 +19,6 @@ const SCHEMA = {
   }
 }
 
-// TODO(mzugm): only latest verions of k8s are supported, need to add support for older versions
 class K8s {
   constructor ({ config, log, caContent, token, authType, clientCreds }) {
     this.log = log
@@ -37,73 +36,128 @@ class K8s {
   }
 
   async init () {
-    this.log.debug('Initializing generic K8s plugin')
+    this.log.debug('Initializing K8s provider')
   }
 
-  async eventStream (namespace) {
-    const stream = await this.apiClient.stream(`/apis/events.k8s.io/v1/namespaces/${namespace}/events?watch=1`)
-    stream.on('error', () => console.log('error on stream'))
-    return stream
-  }
+  // ── Machine operations ──
 
-  async getPod (namespace, podId) {
-    const pod = await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods/${podId}`)
+  async getMachine (namespace, machineId) {
+    const pod = await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods/${machineId}`)
 
     const owner = pod.metadata?.ownerReferences?.find(ref => ref.controller)
     if (owner) {
-      pod.controller = await this.getController(
-        namespace,
-        owner.name,
-        owner.apiVersion,
-        owner.kind
+      pod._resolvedController = await this.#resolveTopController(
+        namespace, owner.name, owner.apiVersion, owner.kind
       )
     }
 
-    const output = this.#formatPod(pod)
-
-    return output
+    return this.#formatMachine(pod)
   }
 
-  async getPods (namespace, labels = {}) {
+  async getMachines (namespace, labels = {}) {
     const labelSelector = querystring.stringify(labels)
     const endpoint = `/api/v1/namespaces/${namespace}/pods?labelSelector=${labelSelector}`
     const { items } = await this.apiClient.request(endpoint)
 
-    return (await Promise.all(items
-      .map(async pod => {
-        const owner = pod.metadata?.ownerReferences?.find(ref => ref.controller)
-        this.log.debug({ pod, owner }, 'getPods')
-        if (owner) {
-          pod.controller = await this.getController(
-            namespace,
-            owner.name,
-            owner.apiVersion,
-            owner.kind
-          )
-        }
-
-        return pod
-      })))
-      .map(this.#formatPod)
+    return Promise.all(items.map(async pod => {
+      const owner = pod.metadata?.ownerReferences?.find(ref => ref.controller)
+      if (owner) {
+        pod._resolvedController = await this.#resolveTopController(
+          namespace, owner.name, owner.apiVersion, owner.kind
+        )
+      }
+      return this.#formatMachine(pod)
+    }))
   }
 
-  async getServices (namespace, labels) {
-    if (Object.keys(labels).length === 0) {
-      // TODO custom error
-      throw new Error('Labels cannot be empty')
-    }
-
-    const { items: services } = await this.apiClient.request(`/api/v1/namespaces/${namespace}/services`)
-
-    return services.filter(service => {
-      const selector = service.spec?.selector
-      if (!selector) return false
-
-      return Object.entries(selector).every(([key, value]) => {
-        return labels[key] === value
-      })
+  async setMachineLabels (namespace, machineId, labels) {
+    await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods/${machineId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/strategic-merge-patch+json'
+      },
+      body: JSON.stringify({ metadata: { labels } })
     })
   }
+
+  // ── Controller operations ──
+
+  async getControllers (namespace, machineId) {
+    let machines = []
+    if (machineId) {
+      machines.push(await this.getMachine(namespace, machineId))
+    } else {
+      machines = await this.getMachines(namespace)
+    }
+
+    const controllersMap = {}
+
+    for (const machine of machines) {
+      if (!machine.controller) continue
+
+      const { name, kind, apiVersion } = machine.controller
+
+      if (controllersMap[name]) {
+        controllersMap[name].machines.push(machine)
+      } else {
+        const raw = await this.#getRawController(namespace, name, apiVersion, kind)
+        controllersMap[name] = {
+          name,
+          replicas: raw.spec?.replicas,
+          labels: raw.metadata?.labels ?? {},
+          providerMetadata: { kind, apiVersion },
+          machines: [machine]
+        }
+      }
+    }
+
+    return Object.values(controllersMap)
+  }
+
+  async getController (namespace, name, providerMetadata) {
+    const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
+    const raw = await this.#getRawController(namespace, name, apiVersion, kind)
+
+    const matchLabels = raw.spec?.selector?.matchLabels || {}
+    const machines = await this.getMachines(namespace, matchLabels)
+
+    return {
+      name,
+      replicas: raw.spec?.replicas,
+      labels: raw.metadata?.labels ?? {},
+      providerMetadata: { kind, apiVersion },
+      machines
+    }
+  }
+
+  async updateControllerReplicas (namespace, name, replicaCount, providerMetadata) {
+    const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
+    const raw = await this.#getRawController(namespace, name, apiVersion, kind)
+
+    raw.spec.replicas = replicaCount
+
+    const controllerPath = this.#createControllerPath(namespace, name, apiVersion, kind)
+    const updated = await this.apiClient.request(controllerPath, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(raw)
+    })
+
+    return {
+      name: updated.metadata?.name,
+      replicas: updated.spec?.replicas,
+      labels: updated.metadata?.labels ?? {},
+      providerMetadata: { kind, apiVersion }
+    }
+  }
+
+  async deleteController (namespace, name, providerMetadata) {
+    const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
+    const controllerPath = this.#createControllerPath(namespace, name, apiVersion, kind)
+    return this.apiClient.request(controllerPath, { method: 'DELETE' })
+  }
+
+  // ── Service operations ──
 
   async getServicesByLabels (namespace, labels) {
     const parts = []
@@ -113,12 +167,20 @@ class K8s {
     const labelSelector = parts.join(',')
     const path = `/api/v1/namespaces/${namespace}/services?labelSelector=${labelSelector}`
     const { items } = await this.apiClient.request(path)
-    return items
+    return items.map(this.#formatServiceEndpoint)
   }
 
-  async getHTTPRoute (namespace, name) {
-    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/httproutes/${name}`
-    return this.apiClient.request(path)
+  async deleteService (namespace, name) {
+    const path = `/api/v1/namespaces/${namespace}/services/${name}`
+    return this.apiClient.request(path, { method: 'DELETE' })
+  }
+
+  // ── Skew protection (K8s only) ──
+
+  async listGateways (namespace) {
+    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/gateways`
+    const { items } = await this.apiClient.request(path)
+    return items
   }
 
   async applyHTTPRoute (namespace, httpRoute) {
@@ -151,111 +213,66 @@ class K8s {
     return this.apiClient.request(path, { method: 'DELETE' })
   }
 
-  async deleteDeployment (namespace, name) {
-    const path = `/apis/apps/v1/namespaces/${namespace}/deployments/${name}`
-    return this.apiClient.request(path, { method: 'DELETE' })
-  }
+  // ── Private helpers ──
 
-  async deleteService (namespace, name) {
-    const path = `/api/v1/namespaces/${namespace}/services/${name}`
-    return this.apiClient.request(path, { method: 'DELETE' })
-  }
-
-  async listAllGateways () {
-    const path = '/apis/gateway.networking.k8s.io/v1/gateways'
-    const { items } = await this.apiClient.request(path)
-    return items
-  }
-
-  async listGateways (namespace) {
-    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/gateways`
-    const { items } = await this.apiClient.request(path)
-    return items
-  }
-
-  async getGateway (namespace, name) {
-    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/gateways/${name}`
-    return this.apiClient.request(path)
-  }
-
-  async getIngressRoutes (namespace, serviceNames) {
-    if (serviceNames.length === 0) {
-      // TODO custom error
-      throw new Error('Must provide a service list')
+  #formatMachine (pod) {
+    const output = {
+      id: pod.metadata?.name,
+      status: pod.status?.phase,
+      startTime: pod.status?.startTime,
+      labels: pod.metadata?.labels ?? {}
     }
 
-    const ingresses = await this.apiClient.request(`/apis/networking.k8s.io/v1/namespaces/${namespace}/ingresses`)
-    const matchingRules = []
-
-    for (const ingress of ingresses.items) {
-      if (!ingress.spec?.rules) continue
-
-      for (const rule of ingress.spec.rules) {
-        if (!rule.http?.paths) continue
-
-        for (const path of rule.http.paths) {
-          if (serviceNames.includes(path.backend.service.name)) {
-            matchingRules.push(rule)
-          }
-        }
+    // Include kind/apiVersion alongside name so getControllers can build
+    // providerMetadata without re-fetching. Fastify response schemas strip
+    // the extra fields when serializing the public Machine.
+    if (pod._resolvedController) {
+      output.controller = {
+        name: pod._resolvedController.metadata?.name || pod._resolvedController.name,
+        kind: pod._resolvedController.kind,
+        apiVersion: pod._resolvedController.apiVersion
       }
     }
 
-    return matchingRules
+    if (pod.spec?.containers?.length > 0) {
+      output.image = pod.spec.containers[0].image
+      output.resources = pod.spec.containers[0].resources
+    }
+
+    return output
   }
 
-  async updateController (namespace, { kind, apiVersion, name }, replicaCount) {
-    let controller = await this.getController(namespace, name, apiVersion, kind)
-
-    // Update replica count, should be available on:
-    // ReplicationController, ReplicaSet, Deployment, StatefulSet
-    controller.spec.replicas = replicaCount
-
-    const controllerPath = this.#createControllerPath(namespace, name, apiVersion, kind)
-    controller = await this.apiClient.request(controllerPath, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(controller)
-    })
-
-    return controller
+  #formatServiceEndpoint (svc) {
+    return {
+      name: svc.metadata?.name,
+      labels: svc.metadata?.labels ?? {},
+      ports: (svc.spec?.ports || []).map(p => ({
+        port: p.port,
+        protocol: p.protocol
+      }))
+    }
   }
 
   /**
-   * Get the highest controller in the chain
-   *
-   * First, load the resource information
-   * Then, checks for any controller in the ownerReferences
-   * Finally, repeats process using the found controller until no more parents
-   * are found
+   * Recursively walks ownerReferences to find the top-level controller.
+   * The kind/apiVersion at each level comes from the ownerReference itself
+   * (K8s populates it for free), so no discovery is needed here.
    */
-  async getController (namespace, name, apiVersion, kind) {
-    this.log.debug({ namespace, name, apiVersion, kind }, 'Getting controlller')
+  async #resolveTopController (namespace, name, apiVersion, kind) {
     const controllerPath = this.#createControllerPath(namespace, name, apiVersion, kind)
-    this.log.debug({ controllerPath })
     const controller = await this.apiClient.request(controllerPath)
 
-    // Add in the controller name to have a similar schema across ownerRef and
-    // controller resources
     if (!controller.name) {
       controller.name = name
     }
 
     const owners = controller.metadata?.ownerReferences ?? []
-
-    // There can only be one controller in a list of owners
-    // See "ownerReferences" in https://kubernetes.io/docs/reference/kubernetes-api/common-definitions/object-meta/
     const parentController = owners.find(owner => owner.controller)
-    this.log.debug({ parentController, owners, controller }, 'Preparing to search for parent')
+
     if (parentController) {
       try {
-        return this.getController(
-          namespace,
-          parentController.name,
-          parentController.apiVersion,
-          parentController.kind
+        return this.#resolveTopController(
+          namespace, parentController.name, parentController.apiVersion, parentController.kind
         )
       } catch (err) {
         this.log.warn({ err }, 'Unable to get parent controller')
@@ -266,24 +283,26 @@ class K8s {
     return controller
   }
 
-  #formatPod (pod) {
-    const output = {
-      id: pod.metadata?.name,
-      status: pod.status?.phase,
-      privateIp: pod.status?.podIP,
-      startTime: pod.status?.startTime,
-      labels: pod.metadata?.labels ?? {},
-      controller: pod.controller
+  /**
+   * Validates the providerMetadata sent by the caller.
+   *
+   * The K8s provider needs (kind, apiVersion) to build the right API path —
+   * Deployments, StatefulSets, etc. live at different URLs. Callers obtain
+   * these on first discovery (via getControllers walking ownerReferences) and
+   * are expected to persist + round-trip them on every subsequent call.
+   *
+   * Missing them is a programming error, not something we silently recover from.
+   */
+  #requireCoordinates (providerMetadata) {
+    if (!providerMetadata || !providerMetadata.kind || !providerMetadata.apiVersion) {
+      throw new Error('K8s provider requires providerMetadata with `kind` and `apiVersion`')
     }
+    return { kind: providerMetadata.kind, apiVersion: providerMetadata.apiVersion }
+  }
 
-    // TODO(20250501) - There is only one container 99% of the time but it is an
-    // array so this could be a future bug
-    if (pod.spec.containers.length > 0) {
-      output.image = pod.spec.containers[0].image
-      output.resources = pod.spec.containers[0].resources
-    }
-
-    return output
+  async #getRawController (namespace, name, apiVersion, kind) {
+    const path = this.#createControllerPath(namespace, name, apiVersion, kind)
+    return this.apiClient.request(path)
   }
 
   #createControllerPath (namespace, name, apiVersion, kind) {
@@ -291,34 +310,19 @@ class K8s {
     const root = apiVersion.split('/').length > 1
       ? `/apis/${apiVersion}`
       : `/api/${apiVersion}`
-    this.log.debug({ kindPart, root }, 'Pathing variables')
     return `${root}/namespaces/${namespace}/${kindPart}/${name}`
-  }
-
-  async setMachineLabels (machineId, namespace, labels) {
-    this.log.debug(`Setting labels for machine ${machineId}: ${JSON.stringify(labels)}`)
-    await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods/${machineId}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/strategic-merge-patch+json'
-      },
-      body: JSON.stringify({ metadata: { labels } })
-    })
   }
 }
 
 async function plugin (fastify, opts) {
-  if (fastify.appConfig.PLT_K8S_PROVIDER !== 'k8s') return
-  fastify.log.info({
-    PROVIDER: fastify.appConfig.PLT_K8S_PROVIDER,
-    INGRESS: fastify.appConfig.PLT_K8S_INGRESS_CONTROLLER
-  }, 'Using generic Kubernetes plugin')
+  if (fastify.appConfig.PLT_PROVIDER !== 'k8s') return
+  fastify.log.info({ PROVIDER: fastify.appConfig.PLT_PROVIDER }, 'Using K8s provider')
 
   const appConfig = fastify.validateOptions(opts, SCHEMA)
 
   const caContent = (await readFile(appConfig.PLT_K8S_CA_PATH, 'utf8')).trim()
   const authType = appConfig.PLT_K8S_AUTH_TYPE
-  let token, clientCert, clientKey
+  let token, clientKey, clientCert
   if (authType === 'token') {
     token = (await readFile(appConfig.PLT_K8S_TOKEN_PATH, 'utf8')).trim()
   } else {
@@ -336,11 +340,11 @@ async function plugin (fastify, opts) {
   })
 
   await k8s.init()
-  fastify.decorate('k8s', k8s)
+  fastify.decorate('provider', k8s)
 }
 
 module.exports = fp(plugin, {
-  name: 'k8s',
+  name: 'provider-k8s',
   dependencies: ['app-configuration']
 })
 

@@ -1,38 +1,25 @@
 'use strict'
 
-module.exports = async function routes (fastify, options) {
-  fastify.get('/gateway/httproutes/:namespace/:name', {
-    schema: {
-      description: 'Get an HTTPRoute by name',
-      params: {
-        type: 'object',
-        properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' },
-          name: { type: 'string' }
-        }
-      }
-    }
-  }, async (request, reply) => {
-    const { namespace, name } = request.params
-    return fastify.k8s.getHTTPRoute(namespace, name)
-  })
+// TODO(ecs): Skew protection — design provider-agnostic traffic routing
+// abstraction when adding skew protection for non-K8s providers.
 
+module.exports = async function routes (fastify) {
   fastify.put('/gateway/httproutes/:namespace', {
     schema: {
       description: 'Create or update an HTTPRoute',
       params: {
         type: 'object',
         properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' }
+          namespace: { $ref: 'machinist#/definitions/namespace' }
         }
       },
       body: {
         type: 'object'
       }
     }
-  }, async (request, reply) => {
+  }, async (request) => {
     const { namespace } = request.params
-    return fastify.k8s.applyHTTPRoute(namespace, request.body)
+    return fastify.provider.applyHTTPRoute(namespace, request.body)
   })
 
   fastify.delete('/gateway/httproutes/:namespace/:name', {
@@ -41,13 +28,13 @@ module.exports = async function routes (fastify, options) {
       params: {
         type: 'object',
         properties: {
-          namespace: { $ref: 'k8s#/definitions/namespace' },
+          namespace: { $ref: 'machinist#/definitions/namespace' },
           name: { type: 'string' }
         }
       }
     }
-  }, async (request, reply) => {
+  }, async (request) => {
     const { namespace, name } = request.params
-    return fastify.k8s.deleteHTTPRoute(namespace, name)
+    return fastify.provider.deleteHTTPRoute(namespace, name)
   })
 }

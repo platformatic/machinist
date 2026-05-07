@@ -34,7 +34,7 @@ test('apply creates a new HTTPRoute', async t => {
 
   const result = await app.inject({
     method: 'PUT',
-    url: '/gateway/httproutes/default',
+    url: '/k8s/gateway/httproutes/default',
     headers: { 'content-type': 'application/json' },
     body: httpRouteFixture
   })
@@ -49,35 +49,7 @@ test('apply creates a new HTTPRoute', async t => {
   // Cleanup
   await app.inject({
     method: 'DELETE',
-    url: '/gateway/httproutes/default/myapp-skew-test'
-  })
-})
-
-test('get HTTPRoute by name', async t => {
-  const { app } = await bootstrap(t)
-
-  await app.inject({
-    method: 'PUT',
-    url: '/gateway/httproutes/default',
-    headers: { 'content-type': 'application/json' },
-    body: httpRouteFixture
-  })
-
-  const result = await app.inject({
-    method: 'GET',
-    url: '/gateway/httproutes/default/myapp-skew-test'
-  })
-
-  assert.strictEqual(result.statusCode, 200)
-
-  const route = result.json()
-  assert.strictEqual(route.metadata.name, 'myapp-skew-test')
-  assert.strictEqual(route.spec.hostnames[0], 'myapp.example.com')
-  assert.strictEqual(route.spec.rules[0].backendRefs[0].name, 'myapp-v1')
-
-  await app.inject({
-    method: 'DELETE',
-    url: '/gateway/httproutes/default/myapp-skew-test'
+    url: '/k8s/gateway/httproutes/default/myapp-skew-test'
   })
 })
 
@@ -86,7 +58,7 @@ test('apply updates an existing HTTPRoute', async t => {
 
   await app.inject({
     method: 'PUT',
-    url: '/gateway/httproutes/default',
+    url: '/k8s/gateway/httproutes/default',
     headers: { 'content-type': 'application/json' },
     body: httpRouteFixture
   })
@@ -110,7 +82,7 @@ test('apply updates an existing HTTPRoute', async t => {
 
   const result = await app.inject({
     method: 'PUT',
-    url: '/gateway/httproutes/default',
+    url: '/k8s/gateway/httproutes/default',
     headers: { 'content-type': 'application/json' },
     body: updated
   })
@@ -124,7 +96,7 @@ test('apply updates an existing HTTPRoute', async t => {
 
   await app.inject({
     method: 'DELETE',
-    url: '/gateway/httproutes/default/myapp-skew-test'
+    url: '/k8s/gateway/httproutes/default/myapp-skew-test'
   })
 })
 
@@ -133,33 +105,15 @@ test('delete HTTPRoute', async t => {
 
   await app.inject({
     method: 'PUT',
-    url: '/gateway/httproutes/default',
+    url: '/k8s/gateway/httproutes/default',
     headers: { 'content-type': 'application/json' },
     body: httpRouteFixture
   })
 
   const result = await app.inject({
     method: 'DELETE',
-    url: '/gateway/httproutes/default/myapp-skew-test'
+    url: '/k8s/gateway/httproutes/default/myapp-skew-test'
   })
 
   assert.strictEqual(result.statusCode, 200)
-
-  const getResult = await app.inject({
-    method: 'GET',
-    url: '/gateway/httproutes/default/myapp-skew-test'
-  })
-
-  assert.strictEqual(getResult.statusCode, 404)
-})
-
-test('get non-existent HTTPRoute returns error', async t => {
-  const { app } = await bootstrap(t)
-
-  const result = await app.inject({
-    method: 'GET',
-    url: '/gateway/httproutes/default/does-not-exist'
-  })
-
-  assert.strictEqual(result.statusCode, 404)
 })

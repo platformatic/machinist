@@ -11,14 +11,14 @@ before(async () => {
   await applyYaml(deploymentFixture)
 })
 
-test('get pod', async t => {
+test('get machine', async t => {
   const { app } = await bootstrap(t)
   const { items } = await getPods({ 'app.kubernetes.io/instance': 'deployment-fixture-pods' })
   const podName = items[0].metadata.name
 
   const result = await app.inject({
     method: 'GET',
-    url: `/pods/default/${podName}`,
+    url: `/k8s/machines/default/${podName}`,
     headers: {
       'content-type': 'application/json'
     }
@@ -35,14 +35,14 @@ test('get pod', async t => {
   assert.equal(image, 'platformatic/machinist-test:latest')
 })
 
-test('set pod labels', async t => {
+test('set machine labels', async t => {
   const { app } = await bootstrap(t)
   const { items } = await getPods({ 'app.kubernetes.io/instance': 'deployment-fixture-pods' })
   const podName = items[0].metadata.name
 
   const result = await app.inject({
     method: 'PATCH',
-    url: `/pods/default/${podName}/labels`,
+    url: `/k8s/machines/default/${podName}/labels`,
     headers: {
       'content-type': 'application/json'
     },
