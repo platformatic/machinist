@@ -4,7 +4,7 @@ const path = require('node:path')
 const { setTimeout } = require('node:timers/promises')
 const { mkdtempSync, readFileSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
-const { buildServer } = require('@platformatic/service')
+const { create } = require('@platformatic/service')
 const { Agent, MockAgent, setGlobalDispatcher } = require('undici')
 const pluralize = require('pluralize')
 const querystring = require('fast-querystring')
@@ -91,14 +91,14 @@ async function bootstrap (t, pluginOverrides = {}) {
   mockAgent.disableNetConnect()
 
   const serverConfig = config(pluginOpt)
-  const server = await buildServer(serverConfig)
-  await server.start()
+  const capability = await create(path.resolve(__dirname, '..'), serverConfig)
+  await capability.start()
   t.after(() => {
-    server.close()
+    capability.stop()
   })
 
   return {
-    app: server,
+    app: capability.getApplication(),
     mockAgent,
     appConfig: pluginOpt
   }
