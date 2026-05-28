@@ -5,7 +5,7 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const { mkdtempSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
-const { buildServer } = require('@platformatic/service')
+const { create } = require('@platformatic/service')
 const { clusterConnectionDetail } = require('./helper')
 
 process.env.NODE_ENV = 'test'
@@ -26,7 +26,7 @@ test('bootup', async (t) => {
     PLT_K8S_CLIENT_KEY: clusterDetail.clientKey
   }
 
-  const server = await buildServer({
+  const server = await create(path.resolve(__dirname, '..'), {
     server: {
       hostname: '127.0.0.1',
       port: 0,
@@ -43,7 +43,7 @@ test('bootup', async (t) => {
   })
 
   t.after(() => {
-    server.close()
+    server.stop()
   })
 
   await assert.doesNotReject(server.start())
