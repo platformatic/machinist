@@ -31,7 +31,7 @@
     "platformatic": "^3.54.0",
     "pluralize": "^8.0.0",
     "split2": "^4.2.0",
-    "undici": "^7.16.0"
+    "undici": "^8.0.0"
   },
   "devDependencies": {
     "borp": "^1.0.0",
