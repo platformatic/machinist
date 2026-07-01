@@ -213,6 +213,66 @@ class K8s {
     return this.apiClient.request(path, { method: 'DELETE' })
   }
 
+  // ── Workload creation (K8s only) ──
+
+  // Idempotent create-or-update of a Deployment, mirroring applyHTTPRoute: GET
+  // the resource, swallow only 404, PUT with the existing resourceVersion when
+  // it exists, else POST.
+  async applyDeployment (namespace, deployment) {
+    const name = deployment.metadata.name
+    const basePath = `/apis/apps/v1/namespaces/${namespace}/deployments`
+
+    let existing
+    try {
+      existing = await this.apiClient.request(`${basePath}/${name}`)
+    } catch (err) {
+      if (err.statusCode !== 404) throw err
+    }
+
+    if (existing) {
+      deployment.metadata.resourceVersion = existing.metadata.resourceVersion
+      return this.apiClient.request(`${basePath}/${name}`, {
+        method: 'PUT',
+        body: JSON.stringify(deployment)
+      })
+    }
+
+    return this.apiClient.request(basePath, {
+      method: 'POST',
+      body: JSON.stringify(deployment)
+    })
+  }
+
+  // Idempotent create-or-update of a Service. spec.clusterIP is immutable — a PUT
+  // that changes it is rejected — so echo the existing clusterIP (and
+  // resourceVersion) back onto the update body.
+  async applyService (namespace, service) {
+    const name = service.metadata.name
+    const basePath = `/api/v1/namespaces/${namespace}/services`
+
+    let existing
+    try {
+      existing = await this.apiClient.request(`${basePath}/${name}`)
+    } catch (err) {
+      if (err.statusCode !== 404) throw err
+    }
+
+    if (existing) {
+      service.metadata.resourceVersion = existing.metadata.resourceVersion
+      service.spec = service.spec || {}
+      service.spec.clusterIP = existing.spec.clusterIP
+      return this.apiClient.request(`${basePath}/${name}`, {
+        method: 'PUT',
+        body: JSON.stringify(service)
+      })
+    }
+
+    return this.apiClient.request(basePath, {
+      method: 'POST',
+      body: JSON.stringify(service)
+    })
+  }
+
   // ── Private helpers ──
 
   #formatMachine (pod) {
