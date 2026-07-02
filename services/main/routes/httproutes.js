@@ -22,6 +22,26 @@ module.exports = async function routes (fastify) {
     return fastify.provider.applyHTTPRoute(namespace, request.body)
   })
 
+  fastify.get('/gateway/httproutes/:namespace/:name', {
+    schema: {
+      description: 'Get an HTTPRoute',
+      params: {
+        type: 'object',
+        properties: {
+          namespace: { $ref: 'machinist#/definitions/namespace' },
+          name: { type: 'string' }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    const { namespace, name } = request.params
+    const route = await fastify.provider.getHTTPRoute(namespace, name)
+    if (!route) {
+      return reply.code(404).send({ message: `HTTPRoute ${namespace}/${name} not found` })
+    }
+    return route
+  })
+
   fastify.delete('/gateway/httproutes/:namespace/:name', {
     schema: {
       description: 'Delete an HTTPRoute',

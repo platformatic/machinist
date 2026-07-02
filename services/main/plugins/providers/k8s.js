@@ -208,6 +208,16 @@ class K8s {
     })
   }
 
+  async getHTTPRoute (namespace, name) {
+    const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/httproutes/${name}`
+    try {
+      return await this.apiClient.request(path)
+    } catch (err) {
+      if (err.statusCode === 404) return null
+      throw err
+    }
+  }
+
   async deleteHTTPRoute (namespace, name) {
     const path = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/httproutes/${name}`
     return this.apiClient.request(path, { method: 'DELETE' })
