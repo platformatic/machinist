@@ -1,7 +1,6 @@
 'use strict'
 
 const { readFile } = require('node:fs/promises')
-const querystring = require('fast-querystring')
 const fp = require('fastify-plugin')
 const pluralize = require('pluralize')
 const K8sClient = require('../../lib/k8s-client')
@@ -55,7 +54,10 @@ class K8s {
   }
 
   async getMachines (namespace, labels = {}) {
-    const labelSelector = querystring.stringify(labels)
+    // k8s labelSelector is comma-separated. querystring.stringify joins with `&`,
+    // which splits every label after the first off into ignored query params, so
+    // only the first label actually filters. Join with `,` like getServicesByLabels.
+    const labelSelector = Object.entries(labels).map(([k, v]) => `${k}=${v}`).join(',')
     const endpoint = `/api/v1/namespaces/${namespace}/pods?labelSelector=${labelSelector}`
     const { items } = await this.apiClient.request(endpoint)
 
