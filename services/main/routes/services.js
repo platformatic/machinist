@@ -60,6 +60,24 @@ module.exports = async function routes (fastify) {
     return fastify.provider.getServicesByLabels(namespace, labels)
   })
 
+  fastify.put('/services/:namespace', {
+    schema: {
+      description: 'Create or update a Service (idempotent)',
+      params: {
+        type: 'object',
+        properties: {
+          namespace: { $ref: 'machinist#/definitions/namespace' }
+        }
+      },
+      body: {
+        type: 'object'
+      }
+    }
+  }, async (request) => {
+    const { namespace } = request.params
+    return fastify.provider.applyService(namespace, request.body)
+  })
+
   fastify.delete('/services/:namespace/:name', {
     schema: {
       params: {

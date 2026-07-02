@@ -119,6 +119,24 @@ module.exports = async function routes (fastify) {
     return fastify.provider.updateControllerReplicas(namespace, name, replicas, providerMetadata)
   })
 
+  fastify.put('/controllers/:namespace', {
+    schema: {
+      description: 'Create or update a Deployment (idempotent)',
+      params: {
+        type: 'object',
+        properties: {
+          namespace: { $ref: 'machinist#/definitions/namespace' }
+        }
+      },
+      body: {
+        type: 'object'
+      }
+    }
+  }, async (request) => {
+    const { namespace } = request.params
+    return fastify.provider.applyDeployment(namespace, request.body)
+  })
+
   fastify.delete('/controllers/:namespace/:name', {
     schema: {
       params: {
