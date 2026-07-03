@@ -236,6 +236,10 @@ class Ecs {
     throw new errors.NotImplementedByProvider('Skew protection (applyHTTPRoute)', 'ecs')
   }
 
+  async getHTTPRoute () {
+    throw new errors.NotImplementedByProvider('Skew protection (getHTTPRoute)', 'ecs')
+  }
+
   async deleteHTTPRoute () {
     throw new errors.NotImplementedByProvider('Skew protection (deleteHTTPRoute)', 'ecs')
   }
