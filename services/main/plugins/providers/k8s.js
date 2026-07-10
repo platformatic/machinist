@@ -311,6 +311,15 @@ class K8s {
       output.resources = pod.spec.containers[0].resources
     }
 
+    // The content-addressed digest Kubernetes resolved for the running image.
+    // Unlike spec.image (a possibly-mutable tag like `:latest`), this changes
+    // iff the image content changes, so consumers can version by content. Format
+    // is `<repo>@sha256:...`, sometimes prefixed with `docker-pullable://`.
+    const imageID = pod.status?.containerStatuses?.[0]?.imageID
+    if (imageID) {
+      output.imageDigest = imageID.replace(/^docker-pullable:\/\//, '')
+    }
+
     return output
   }
 
