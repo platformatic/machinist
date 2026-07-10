@@ -264,9 +264,7 @@ class Ecs {
       output.image = task.containers[0].image
       // The content-addressed digest ECS resolved for the running image
       // (DescribeTasks -> containers[].imageDigest), the analog of the k8s
-      // provider's status.imageID. Unlike the task-def image tag it changes if
-      // the image content changes, so consumers can version by content. ECS
-      // returns a bare `sha256:...`.
+      // provider's status.imageID.
       if (task.containers[0].imageDigest) {
         output.imageDigest = task.containers[0].imageDigest
       }
@@ -284,6 +282,10 @@ class Ecs {
       }
       output.resources = resources
     }
+
+    // ECS analog of the k8s pod Ready condition: RUNNING and not failing its health
+    // check (healthStatus is UNKNOWN when no check is defined -> RUNNING is enough).
+    output.ready = task.lastStatus === 'RUNNING' && task.healthStatus !== 'UNHEALTHY'
 
     return output
   }
