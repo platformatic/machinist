@@ -311,6 +311,12 @@ class K8s {
       output.resources = pod.spec.containers[0].resources
     }
 
+    // The content-addressed digest Kubernetes resolved for the running image.
+    const imageID = pod.status?.containerStatuses?.[0]?.imageID
+    if (imageID) {
+      output.imageDigest = imageID.replace(/^docker-pullable:\/\//, '')
+    }
+
     return output
   }
 

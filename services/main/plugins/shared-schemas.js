@@ -20,6 +20,7 @@ module.exports = fp(function (fastify, opts, done) {
       status: { type: 'string' },
       startTime: { type: 'string', format: 'date-time' },
       image: { type: 'string' },
+      imageDigest: { type: 'string' },
       labels: {
         type: 'object',
         patternProperties: {

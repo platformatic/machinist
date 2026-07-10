@@ -2,6 +2,8 @@
 
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const ecsSdk = require('@aws-sdk/client-ecs')
+const { Ecs } = require('../plugins/providers/ecs')
 
 function mockTask (overrides = {}) {
   return {
@@ -112,6 +114,37 @@ test('Ecs#formatMachine extracts correct fields from ECS task', async () => {
   assert.strictEqual(task.cpu, '256')
   assert.strictEqual(task.memory, '512')
   assert.strictEqual(task.tags[0].key, 'app.kubernetes.io/name')
+})
+
+// Drive the real Ecs#formatMachine via getMachine with the ECS client's send()
+// stubbed, so we exercise the actual field mapping (the mock provider above
+// bypasses it).
+async function getMachineWithTask (task) {
+  const originalSend = ecsSdk.ECSClient.prototype.send
+  ecsSdk.ECSClient.prototype.send = async () => ({ tasks: [task], failures: [] })
+  try {
+    const ecs = new Ecs({
+      config: { PLT_ECS_REGION: 'us-east-1', PLT_ECS_CLUSTER: 'my-cluster' },
+      log: { debug () {} }
+    })
+    return await ecs.getMachine('my-cluster', task.taskArn)
+  } finally {
+    ecsSdk.ECSClient.prototype.send = originalSend
+  }
+}
+
+test('Ecs#formatMachine surfaces the container imageDigest', async () => {
+  const machine = await getMachineWithTask(mockTask({
+    containers: [{ name: 'web', image: 'myapp:latest', imageDigest: 'sha256:b0162380' }]
+  }))
+  assert.strictEqual(machine.image, 'myapp:latest')
+  assert.strictEqual(machine.imageDigest, 'sha256:b0162380')
+})
+
+test('Ecs#formatMachine omits imageDigest when the task container has none', async () => {
+  const machine = await getMachineWithTask(mockTask()) // default container carries no imageDigest
+  assert.strictEqual(machine.image, 'myapp:latest')
+  assert.strictEqual(machine.imageDigest, undefined)
 })
 
 test('task.group parsing extracts service name', async () => {
@@ -341,8 +374,6 @@ test('DELETE /ecs/services/:namespace/:name is a no-op for ECS', async (t) => {
 })
 
 // ── Skew protection: ECS provider rejects with a clean 501 ──
-
-const { Ecs } = require('../plugins/providers/ecs')
 
 function buildEcs () {
   return new Ecs({

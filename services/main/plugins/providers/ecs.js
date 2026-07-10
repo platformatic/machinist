@@ -262,6 +262,14 @@ class Ecs {
     // Image + resources from first container
     if (task.containers?.length > 0) {
       output.image = task.containers[0].image
+      // The content-addressed digest ECS resolved for the running image
+      // (DescribeTasks -> containers[].imageDigest), the analog of the k8s
+      // provider's status.imageID. Unlike the task-def image tag it changes if
+      // the image content changes, so consumers can version by content. ECS
+      // returns a bare `sha256:...`.
+      if (task.containers[0].imageDigest) {
+        output.imageDigest = task.containers[0].imageDigest
+      }
     }
 
     // Task-level resources (ECS has no requests/limits distinction)
