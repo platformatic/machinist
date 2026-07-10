@@ -317,6 +317,11 @@ class K8s {
       output.imageDigest = imageID.replace(/^docker-pullable:\/\//, '')
     }
 
+    // The kubelet's Ready verdict -- what gates the pod's inclusion in the Service
+    // endpoints, i.e. whether the gateway can route to it.
+    const readyCond = pod.status?.conditions?.find(c => c.type === 'Ready')
+    output.ready = readyCond?.status === 'True'
+
     return output
   }
 

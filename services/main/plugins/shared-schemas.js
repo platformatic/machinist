@@ -21,6 +21,7 @@ module.exports = fp(function (fastify, opts, done) {
       startTime: { type: 'string', format: 'date-time' },
       image: { type: 'string' },
       imageDigest: { type: 'string' },
+      ready: { type: 'boolean' },
       labels: {
         type: 'object',
         patternProperties: {
