@@ -285,6 +285,22 @@ class K8s {
     })
   }
 
+  // Idempotent create-or-update of an image-pull Secret via server-side apply: a
+  // single PATCH, no read-before-write. This deliberately avoids GET on secrets
+  // (which would let the SA read every secret's contents in the namespace); SSA
+  // needs only create + patch. fieldManager marks ICC as the owner and force
+  // takes ownership of any conflicting fields. The manifest carries apiVersion +
+  // kind, as SSA requires.
+  async applySecret (namespace, secret) {
+    const name = secret.metadata.name
+    const path = `/api/v1/namespaces/${namespace}/secrets/${name}?fieldManager=icc&force=true`
+    return this.apiClient.request(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/apply-patch+yaml' },
+      body: JSON.stringify(secret)
+    })
+  }
+
   // ── Private helpers ──
 
   #formatMachine (pod) {

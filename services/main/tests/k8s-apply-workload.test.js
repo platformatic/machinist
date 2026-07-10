@@ -34,7 +34,7 @@ function fakeClient ({ existing = null } = {}) {
     calls,
     request: async (path, overrides = {}) => {
       const method = overrides.method || 'GET'
-      calls.push({ path, method, body: overrides.body ? JSON.parse(overrides.body) : undefined })
+      calls.push({ path, method, headers: overrides.headers, body: overrides.body ? JSON.parse(overrides.body) : undefined })
       if (method === 'GET') {
         if (existing) return existing
         throw notFound()
@@ -94,6 +94,20 @@ test('applyService echoes the immutable clusterIP + resourceVersion on update', 
   assert.strictEqual(client.calls[1].method, 'PUT')
   assert.strictEqual(client.calls[1].body.spec.clusterIP, '10.43.0.9')
   assert.strictEqual(client.calls[1].body.metadata.resourceVersion, 'rv-7')
+})
+
+test('applySecret uses server-side apply: one PATCH, no read (never GETs secrets)', async () => {
+  const k8s = buildProvider()
+  const client = fakeClient()
+  k8s.apiClient = client
+
+  await k8s.applySecret('platformatic', { apiVersion: 'v1', kind: 'Secret', metadata: { name: 'my-app-v1-pull' }, type: 'kubernetes.io/dockerconfigjson', data: {} })
+
+  assert.strictEqual(client.calls.length, 1)
+  assert.strictEqual(client.calls[0].method, 'PATCH')
+  assert.strictEqual(client.calls[0].path, '/api/v1/namespaces/platformatic/secrets/my-app-v1-pull?fieldManager=icc&force=true')
+  assert.strictEqual(client.calls[0].headers['Content-Type'], 'application/apply-patch+yaml')
+  assert.ok(!client.calls.some(c => c.method === 'GET'), 'never GETs the secret')
 })
 
 test('applyDeployment rethrows non-404 probe errors', async () => {
