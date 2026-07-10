@@ -96,6 +96,31 @@ test('applyService echoes the immutable clusterIP + resourceVersion on update', 
   assert.strictEqual(client.calls[1].body.metadata.resourceVersion, 'rv-7')
 })
 
+test('applySecret POSTs a new Secret when none exists', async () => {
+  const k8s = buildProvider()
+  const client = fakeClient({ existing: null })
+  k8s.apiClient = client
+
+  await k8s.applySecret('platformatic', { metadata: { name: 'my-app-v1-pull' }, type: 'kubernetes.io/dockerconfigjson', data: {} })
+
+  assert.strictEqual(client.calls[0].method, 'GET')
+  assert.strictEqual(client.calls[0].path, '/api/v1/namespaces/platformatic/secrets/my-app-v1-pull')
+  assert.strictEqual(client.calls[1].method, 'POST')
+  assert.strictEqual(client.calls[1].path, '/api/v1/namespaces/platformatic/secrets')
+})
+
+test('applySecret PUTs with the existing resourceVersion on update (idempotent)', async () => {
+  const k8s = buildProvider()
+  const client = fakeClient({ existing: { metadata: { name: 'my-app-v1-pull', resourceVersion: 'rv-9' } } })
+  k8s.apiClient = client
+
+  await k8s.applySecret('platformatic', { metadata: { name: 'my-app-v1-pull' }, data: {} })
+
+  assert.strictEqual(client.calls[1].method, 'PUT')
+  assert.strictEqual(client.calls[1].path, '/api/v1/namespaces/platformatic/secrets/my-app-v1-pull')
+  assert.strictEqual(client.calls[1].body.metadata.resourceVersion, 'rv-9')
+})
+
 test('applyDeployment rethrows non-404 probe errors', async () => {
   const k8s = buildProvider()
   const boom = new Error('boom')

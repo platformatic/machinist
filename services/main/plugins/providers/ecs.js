@@ -244,6 +244,13 @@ class Ecs {
     throw new errors.NotImplementedByProvider('Skew protection (deleteHTTPRoute)', 'ecs')
   }
 
+  // K8s image-pull secrets have no ECS analog: ECS pulls private images via a
+  // task-definition repositoryCredentials (a Secrets Manager ARN), set when the
+  // task is registered, not as a standalone resource.
+  async applySecret () {
+    throw new errors.NotImplementedByProvider('Image pull secret (applySecret)', 'ecs')
+  }
+
   // ── Private helpers ──
 
   #formatMachine (task) {

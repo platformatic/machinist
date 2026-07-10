@@ -285,6 +285,34 @@ class K8s {
     })
   }
 
+  // Idempotent create-or-update of a Secret, mirroring applyDeployment. Used for
+  // image-pull secrets so a pod can pull a private image; the caller (ICC) holds
+  // the credentials for the length of this request only.
+  async applySecret (namespace, secret) {
+    const name = secret.metadata.name
+    const basePath = `/api/v1/namespaces/${namespace}/secrets`
+
+    let existing
+    try {
+      existing = await this.apiClient.request(`${basePath}/${name}`)
+    } catch (err) {
+      if (err.statusCode !== 404) throw err
+    }
+
+    if (existing) {
+      secret.metadata.resourceVersion = existing.metadata.resourceVersion
+      return this.apiClient.request(`${basePath}/${name}`, {
+        method: 'PUT',
+        body: JSON.stringify(secret)
+      })
+    }
+
+    return this.apiClient.request(basePath, {
+      method: 'POST',
+      body: JSON.stringify(secret)
+    })
+  }
+
   // ── Private helpers ──
 
   #formatMachine (pod) {
