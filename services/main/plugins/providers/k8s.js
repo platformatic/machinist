@@ -19,7 +19,7 @@ const SCHEMA = {
 }
 
 class K8s {
-  constructor ({ config, log, caContent, token, authType, clientCreds }) {
+  constructor ({ config, log, caContent, tokenPath, authType, clientCreds }) {
     this.log = log
     this.config = config
     this.apiClient = new K8sClient({
@@ -28,7 +28,7 @@ class K8s {
       clientCert: clientCreds.cert,
       clientKey: clientCreds.key,
       caCert: caContent,
-      bearerToken: token,
+      tokenPath,
       apiUrl: config.PLT_K8S_REST_API_URL,
       log
     })
@@ -421,9 +421,13 @@ async function plugin (fastify, opts) {
 
   const caContent = (await readFile(appConfig.PLT_K8S_CA_PATH, 'utf8')).trim()
   const authType = appConfig.PLT_K8S_AUTH_TYPE
-  let token, clientKey, clientCert
+  let clientKey, clientCert
   if (authType === 'token') {
-    token = (await readFile(appConfig.PLT_K8S_TOKEN_PATH, 'utf8')).trim()
+    // Fail fast at startup if the token file is missing or unreadable. The
+    // value itself is re-read per request by K8sClient (see #getAuthHeaders)
+    // rather than cached here, since kubelet rotates it in place roughly
+    // every hour and this process can easily outlive that window.
+    await readFile(appConfig.PLT_K8S_TOKEN_PATH, 'utf8')
   } else {
     clientKey = Buffer.from(appConfig.PLT_K8S_CLIENT_KEY, 'base64').toString()
     clientCert = Buffer.from(appConfig.PLT_K8S_CLIENT_CERT, 'base64').toString()
@@ -431,7 +435,7 @@ async function plugin (fastify, opts) {
 
   const k8s = new K8s({
     caContent,
-    token,
+    tokenPath: appConfig.PLT_K8S_TOKEN_PATH,
     authType,
     clientCreds: { key: clientKey, cert: clientCert },
     config: appConfig,
