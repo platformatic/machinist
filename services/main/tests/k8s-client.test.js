@@ -2,6 +2,9 @@
 
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const { mkdtempSync, writeFileSync, rmSync } = require('node:fs')
+const { tmpdir } = require('node:os')
+const { join } = require('node:path')
 const fastify = require('fastify')
 const K8sClient = require('../lib/k8s-client')
 
@@ -10,6 +13,16 @@ const mockLogger = {
   warn: () => {},
   info: () => {},
   debug: () => {}
+}
+
+// K8sClient re-reads the token from disk on every call (see #getAuthHeaders),
+// so tests need a real file rather than a static string.
+function writeTempToken (t, content) {
+  const dir = mkdtempSync(join(tmpdir(), 'k8s-client-test-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const tokenPath = join(dir, 'token')
+  writeFileSync(tokenPath, content)
+  return tokenPath
 }
 
 test('K8sClient retry logic on connection reset', async t => {
@@ -38,7 +51,7 @@ test('K8sClient retry logic on connection reset', async t => {
     authType: 'token',
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
-    bearerToken: 'fake-token',
+    tokenPath: writeTempToken(t, 'fake-token'),
     apiUrl,
     log: mockLogger
   })
@@ -68,7 +81,7 @@ test('K8sClient fails after max retries on connection reset', async t => {
     authType: 'token',
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
-    bearerToken: 'fake-token',
+    tokenPath: writeTempToken(t, 'fake-token'),
     apiUrl,
     log: mockLogger
   })
@@ -105,7 +118,7 @@ test('K8sClient does not retry HTTP errors', async t => {
     authType: 'token',
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
-    bearerToken: 'fake-token',
+    tokenPath: writeTempToken(t, 'fake-token'),
     apiUrl,
     log: mockLogger
   })
@@ -122,10 +135,47 @@ test('K8sClient has clientTtl configured', t => {
     authType: 'token',
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
-    bearerToken: 'fake-token',
+    tokenPath: writeTempToken(t, 'fake-token'),
     apiUrl: 'http://localhost:8080',
     log: mockLogger
   })
 
   assert.ok(client, 'Client should be created')
+})
+
+test('K8sClient re-reads the token file on every request instead of caching it', async t => {
+  const app = fastify({ logger: false })
+
+  const seenAuthHeaders = []
+  app.get('/whoami', async (request, reply) => {
+    seenAuthHeaders.push(request.headers.authorization)
+    return { items: [] }
+  })
+
+  await app.listen({ port: 0, host: '127.0.0.1' })
+
+  t.after(async () => {
+    await app.close()
+  })
+
+  const apiUrl = `http://127.0.0.1:${app.server.address().port}`
+  const tokenPath = writeTempToken(t, 'token-v1')
+
+  const client = new K8sClient({
+    authType: 'token',
+    allowSelfSignedCert: true,
+    caCert: 'fake-ca',
+    tokenPath,
+    apiUrl,
+    log: mockLogger
+  })
+
+  await client.request('/whoami')
+
+  // Simulate kubelet rotating the token in place while the process is alive.
+  writeFileSync(tokenPath, 'token-v2')
+
+  await client.request('/whoami')
+
+  assert.deepStrictEqual(seenAuthHeaders, ['Bearer token-v1', 'Bearer token-v2'])
 })

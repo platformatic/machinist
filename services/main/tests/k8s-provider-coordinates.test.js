@@ -18,7 +18,7 @@ function buildProvider () {
     },
     log: { debug () {}, info () {}, warn () {}, error () {} },
     caContent: '',
-    token: 'test',
+    tokenPath: 'test',
     authType: 'token',
     clientCreds: {}
   })
