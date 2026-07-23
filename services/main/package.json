@@ -20,6 +20,8 @@
   "dependencies": {
     "@aws-sdk/client-ecs": "^3.1035.0",
     "@aws-sdk/client-resource-groups-tagging-api": "^3.1035.0",
+    "@aws-sdk/client-secrets-manager": "^3.1091.0",
+    "@aws-sdk/client-servicediscovery": "^3.1091.0",
     "@fastify/autoload": "^6.0.2",
     "@fastify/deepmerge": "^3.0.0",
     "@fastify/error": "^4.0.0",
@@ -34,6 +36,8 @@
     "undici": "^8.0.0"
   },
   "devDependencies": {
+    "@aws-sdk/client-ec2": "^3.1091.0",
+    "aws-sdk-client-mock": "^4.1.0",
     "borp": "^1.0.0",
     "fastify": "^5.6.1",
     "snazzy": "^9.0.0",

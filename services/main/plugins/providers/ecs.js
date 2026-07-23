@@ -9,26 +9,99 @@ const {
   ListServicesCommand,
   UpdateServiceCommand,
   DeleteServiceCommand,
-  TagResourceCommand
+  TagResourceCommand,
+  RegisterTaskDefinitionCommand,
+  CreateServiceCommand
 } = require('@aws-sdk/client-ecs')
 const {
   ResourceGroupsTaggingAPIClient,
   GetResourcesCommand
 } = require('@aws-sdk/client-resource-groups-tagging-api')
+const {
+  SecretsManagerClient,
+  CreateSecretCommand,
+  PutSecretValueCommand
+} = require('@aws-sdk/client-secrets-manager')
+const {
+  ServiceDiscoveryClient,
+  CreateServiceCommand: CreateDiscoveryServiceCommand,
+  ListServicesCommand: ListDiscoveryServicesCommand
+} = require('@aws-sdk/client-servicediscovery')
 const errors = require('../../errors')
 
 const SCHEMA = {
   type: 'object',
   properties: {
     PLT_ECS_REGION: { type: 'string' },
-    PLT_ECS_CLUSTER: { type: 'string' }
+    PLT_ECS_CLUSTER: { type: 'string' },
+    PLT_ECS_ENDPOINT: { type: 'string' },
+    // Infrastructure the CDK stack provisions and passes in; a task definition
+    // cannot be rendered without it, which is why ICC sends a neutral spec and
+    // this provider fills in the AWS context (ECS-SUPPORT.md D1).
+    PLT_ECS_SUBNETS: { type: 'string' },
+    PLT_ECS_SECURITY_GROUPS: { type: 'string' },
+    PLT_ECS_EXECUTION_ROLE_ARN: { type: 'string' },
+    PLT_ECS_TASK_ROLE_ARN: { type: 'string' },
+    PLT_ECS_LOG_GROUP: { type: 'string' },
+    // Cloud Map namespace for handler addressing (ECS-SUPPORT.md D3). Without
+    // it services are created without a registry and are only reachable via a
+    // load balancer.
+    PLT_ECS_CLOUD_MAP_NAMESPACE_ID: { type: 'string' }
   },
   required: ['PLT_ECS_REGION', 'PLT_ECS_CLUSTER']
 }
 
+// Fargate only accepts fixed CPU values, each with a bounded memory range.
+const FARGATE_CPU = [256, 512, 1024, 2048, 4096, 8192, 16384]
+const FARGATE_MEMORY_RANGE = {
+  256: [512, 2048],
+  512: [1024, 4096],
+  1024: [2048, 8192],
+  2048: [4096, 16384],
+  4096: [8192, 30720],
+  8192: [16384, 61440],
+  16384: [32768, 122880]
+}
+
+// '512Mi' / '1Gi' / '1024' -> MiB.
+function toMiB (value) {
+  const s = String(value).trim()
+  const n = parseFloat(s)
+  if (Number.isNaN(n)) return null
+  if (s.endsWith('Gi')) return Math.round(n * 1024)
+  if (s.endsWith('G')) return Math.round((n * 1000 ** 3) / 1024 ** 2)
+  if (s.endsWith('Mi')) return Math.round(n)
+  if (s.endsWith('M')) return Math.round((n * 1000 ** 2) / 1024 ** 2)
+  if (s.endsWith('Ki')) return Math.round(n / 1024)
+  return Math.round(n / 1024 ** 2)
+}
+
+// '500m' / '1' / '1.5' -> ECS CPU units, where 1024 is one vCPU.
+function toCpuUnits (value) {
+  const s = String(value).trim()
+  const n = parseFloat(s)
+  if (Number.isNaN(n)) return null
+  return Math.round(s.endsWith('m') ? (n / 1000) * 1024 : n * 1024)
+}
+
+// Snap a requested cpu/memory pair onto the nearest valid Fargate combination,
+// always rounding up so a workload never gets less than it asked for.
+function toFargateSize (resources) {
+  const wantCpu = toCpuUnits(resources?.limits?.cpu ?? resources?.requests?.cpu ?? '500m') ?? 512
+  const wantMem = toMiB(resources?.limits?.memory ?? resources?.requests?.memory ?? '1Gi') ?? 1024
+
+  for (const cpu of FARGATE_CPU) {
+    if (cpu < wantCpu) continue
+    const [minMem, maxMem] = FARGATE_MEMORY_RANGE[cpu]
+    if (wantMem > maxMem) continue
+    return { cpu: String(cpu), memory: String(Math.max(minMem, wantMem)) }
+  }
+
+  const largest = FARGATE_CPU[FARGATE_CPU.length - 1]
+  return { cpu: String(largest), memory: String(FARGATE_MEMORY_RANGE[largest][1]) }
+}
+
 class Ecs {
-  #ecs
-  #tagging
   #cluster
 
   constructor ({ config, log }) {
@@ -37,8 +110,15 @@ class Ecs {
     this.#cluster = config.PLT_ECS_CLUSTER
 
     const clientConfig = { region: config.PLT_ECS_REGION }
-    this.#ecs = new ECSClient(clientConfig)
-    this.#tagging = new ResourceGroupsTaggingAPIClient(clientConfig)
+    // Unset in production; points at an AWS emulator in tests.
+    if (config.PLT_ECS_ENDPOINT) {
+      clientConfig.endpoint = config.PLT_ECS_ENDPOINT
+    }
+    // Public so tests can inject a fake, as the k8s provider does with apiClient.
+    this.ecsClient = new ECSClient(clientConfig)
+    this.taggingClient = new ResourceGroupsTaggingAPIClient(clientConfig)
+    this.secretsClient = new SecretsManagerClient(clientConfig)
+    this.discoveryClient = new ServiceDiscoveryClient(clientConfig)
   }
 
   async init () {
@@ -48,7 +128,7 @@ class Ecs {
   // ── Machine operations ──
 
   async getMachine (namespace, machineId) {
-    const { tasks, failures } = await this.#ecs.send(new DescribeTasksCommand({
+    const { tasks, failures } = await this.ecsClient.send(new DescribeTasksCommand({
       cluster: namespace,
       tasks: [machineId],
       include: ['TAGS']
@@ -87,7 +167,7 @@ class Ecs {
       key, value
     }))
 
-    await this.#ecs.send(new TagResourceCommand({
+    await this.ecsClient.send(new TagResourceCommand({
       resourceArn: arn,
       tags
     }))
@@ -112,7 +192,7 @@ class Ecs {
     // DescribeServices accepts max 10 at a time
     for (let i = 0; i < serviceArns.length; i += 10) {
       const batch = serviceArns.slice(i, i + 10)
-      const { services } = await this.#ecs.send(new DescribeServicesCommand({
+      const { services } = await this.ecsClient.send(new DescribeServicesCommand({
         cluster: namespace,
         services: batch,
         include: ['TAGS']
@@ -133,7 +213,7 @@ class Ecs {
   }
 
   async getController (namespace, name) {
-    const { services, failures } = await this.#ecs.send(new DescribeServicesCommand({
+    const { services, failures } = await this.ecsClient.send(new DescribeServicesCommand({
       cluster: namespace,
       services: [name],
       include: ['TAGS']
@@ -165,7 +245,7 @@ class Ecs {
   }
 
   async updateControllerReplicas (namespace, name, replicaCount) {
-    const { service } = await this.#ecs.send(new UpdateServiceCommand({
+    const { service } = await this.ecsClient.send(new UpdateServiceCommand({
       cluster: namespace,
       service: name,
       desiredCount: replicaCount
@@ -180,7 +260,7 @@ class Ecs {
   }
 
   async deleteController (namespace, name) {
-    await this.#ecs.send(new DeleteServiceCommand({
+    await this.ecsClient.send(new DeleteServiceCommand({
       cluster: namespace,
       service: name,
       force: true
@@ -196,7 +276,7 @@ class Ecs {
     const result = []
     for (let i = 0; i < serviceArns.length; i += 10) {
       const batch = serviceArns.slice(i, i + 10)
-      const { services } = await this.#ecs.send(new DescribeServicesCommand({
+      const { services } = await this.ecsClient.send(new DescribeServicesCommand({
         cluster: namespace,
         services: batch,
         include: ['TAGS']
@@ -217,6 +297,171 @@ class Ecs {
     // (networking resource) separately from a Deployment.
     // For ECS it's a no-op since deleteController already removed everything.
     this.log.debug({ namespace, name }, 'deleteService is a no-op for ECS (handled by deleteController)')
+  }
+
+  // ── Workload creation ──
+
+  // Render ICC's provider-neutral workload spec into a task definition plus a
+  // service. ECS collapses the k8s Deployment and Service into one resource, so
+  // this replaces both applyDeployment and applyService (ECS-SUPPORT.md D4).
+  async applyWorkload (namespace, spec) {
+    const taskDefinitionArn = await this.#registerTaskDefinition(spec)
+    const registries = await this.#resolveServiceRegistries(spec)
+    const existing = await this.#findService(namespace, spec.name)
+
+    const tags = Object.entries(spec.labels ?? {}).map(([key, value]) => ({ key, value }))
+    const desiredCount = spec.minReplicas ?? 1
+
+    if (existing) {
+      // Registries and network config are fixed at creation; only the task
+      // definition and the replica count can change on an update.
+      const { service } = await this.ecsClient.send(new UpdateServiceCommand({
+        cluster: namespace,
+        service: spec.name,
+        taskDefinition: taskDefinitionArn,
+        desiredCount
+      }))
+      if (tags.length > 0) {
+        await this.ecsClient.send(new TagResourceCommand({ resourceArn: service.serviceArn, tags }))
+      }
+      return { name: service.serviceName, taskDefinitionArn, created: false }
+    }
+
+    const { service } = await this.ecsClient.send(new CreateServiceCommand({
+      cluster: namespace,
+      serviceName: spec.name,
+      taskDefinition: taskDefinitionArn,
+      desiredCount,
+      launchType: 'FARGATE',
+      networkConfiguration: this.#networkConfiguration(),
+      ...(registries.length > 0 ? { serviceRegistries: registries } : {}),
+      ...(tags.length > 0 ? { tags } : {}),
+      propagateTags: 'SERVICE',
+      enableECSManagedTags: true
+    }))
+
+    return { name: service.serviceName, taskDefinitionArn, created: true }
+  }
+
+  async #registerTaskDefinition (spec) {
+    const { cpu, memory } = toFargateSize(spec.resources)
+    const metricsPort = spec.ports?.metrics ?? 9090
+    const appPort = spec.ports?.app ?? 3042
+
+    const container = {
+      name: spec.name,
+      image: spec.image,
+      essential: true,
+      portMappings: [
+        { containerPort: appPort, protocol: 'tcp', name: 'app' },
+        { containerPort: metricsPort, protocol: 'tcp', name: 'metrics' }
+      ],
+      // K8s has three probes; ECS has one container health check. Readiness for
+      // routing is the target group's own check, so this covers liveness.
+      healthCheck: {
+        command: ['CMD-SHELL', `curl -f http://localhost:${metricsPort}${spec.healthCheck?.livePath ?? '/status'} || exit 1`],
+        interval: 15,
+        timeout: 5,
+        retries: 3,
+        startPeriod: 30
+      },
+      environment: [...(spec.env ?? []), ...(spec.platformEnv ?? [])]
+    }
+
+    const credentialsArn = await this.#ensurePullCredentials(spec)
+    if (credentialsArn) {
+      container.repositoryCredentials = { credentialsParameter: credentialsArn }
+    }
+
+    if (this.config.PLT_ECS_LOG_GROUP) {
+      container.logConfiguration = {
+        logDriver: 'awslogs',
+        options: {
+          'awslogs-group': this.config.PLT_ECS_LOG_GROUP,
+          'awslogs-region': this.config.PLT_ECS_REGION,
+          'awslogs-stream-prefix': spec.appName ?? spec.name
+        }
+      }
+    }
+
+    const { taskDefinition } = await this.ecsClient.send(new RegisterTaskDefinitionCommand({
+      family: spec.name,
+      networkMode: 'awsvpc',
+      requiresCompatibilities: ['FARGATE'],
+      cpu,
+      memory,
+      ...(this.config.PLT_ECS_EXECUTION_ROLE_ARN ? { executionRoleArn: this.config.PLT_ECS_EXECUTION_ROLE_ARN } : {}),
+      ...(this.config.PLT_ECS_TASK_ROLE_ARN ? { taskRoleArn: this.config.PLT_ECS_TASK_ROLE_ARN } : {}),
+      containerDefinitions: [container]
+    }))
+
+    return taskDefinition.taskDefinitionArn
+  }
+
+  // K8s pulls private images with a dockerconfigjson Secret; ECS needs the
+  // credentials in Secrets Manager and referenced from the task definition.
+  async #ensurePullCredentials (spec) {
+    if (!spec.pullSecret) return null
+
+    const { username, password } = spec.pullSecret
+    const name = `${spec.name}-pull`
+    const secretString = JSON.stringify({ username, password })
+
+    try {
+      const { ARN } = await this.secretsClient.send(new CreateSecretCommand({ Name: name, SecretString: secretString }))
+      return ARN
+    } catch (err) {
+      if (err.name !== 'ResourceExistsException') throw err
+      const { ARN } = await this.secretsClient.send(new PutSecretValueCommand({ SecretId: name, SecretString: secretString }))
+      return ARN
+    }
+  }
+
+  // Cloud Map gives app tasks a stable in-VPC DNS name, which is how ICC
+  // addresses workflow handlers on ECS (ECS-SUPPORT.md D3).
+  async #resolveServiceRegistries (spec) {
+    const namespaceId = this.config.PLT_ECS_CLOUD_MAP_NAMESPACE_ID
+    if (!namespaceId) return []
+
+    const { Services } = await this.discoveryClient.send(new ListDiscoveryServicesCommand({
+      Filters: [{ Name: 'NAMESPACE_ID', Values: [namespaceId], Condition: 'EQ' }]
+    }))
+
+    const found = Services?.find(s => s.Name === spec.name)
+    if (found) return [{ registryArn: found.Arn }]
+
+    const { Service } = await this.discoveryClient.send(new CreateDiscoveryServiceCommand({
+      Name: spec.name,
+      NamespaceId: namespaceId,
+      DnsConfig: { DnsRecords: [{ Type: 'A', TTL: 60 }] }
+    }))
+
+    return [{ registryArn: Service.Arn }]
+  }
+
+  #networkConfiguration () {
+    const subnets = (this.config.PLT_ECS_SUBNETS ?? '').split(',').map(s => s.trim()).filter(Boolean)
+    const securityGroups = (this.config.PLT_ECS_SECURITY_GROUPS ?? '').split(',').map(s => s.trim()).filter(Boolean)
+
+    if (subnets.length === 0) {
+      throw new errors.ConfigError('PLT_ECS_SUBNETS is required to create an ECS service')
+    }
+
+    return {
+      awsvpcConfiguration: {
+        subnets,
+        ...(securityGroups.length > 0 ? { securityGroups } : {}),
+        assignPublicIp: 'DISABLED'
+      }
+    }
+  }
+
+  async #findService (namespace, name) {
+    const { services } = await this.ecsClient.send(new DescribeServicesCommand({
+      cluster: namespace,
+      services: [name]
+    }))
+    return services?.find(s => s.status === 'ACTIVE') ?? null
   }
 
   // ── Skew protection ──
@@ -345,7 +590,7 @@ class Ecs {
     if (machineId.startsWith('arn:')) return machineId
 
     // Otherwise describe to get the full ARN
-    const { tasks } = await this.#ecs.send(new DescribeTasksCommand({
+    const { tasks } = await this.ecsClient.send(new DescribeTasksCommand({
       cluster: namespace,
       tasks: [machineId]
     }))
@@ -367,7 +612,7 @@ class Ecs {
       const params = { cluster: namespace, maxResults: 100, nextToken }
       if (serviceName) params.serviceName = serviceName
 
-      const result = await this.#ecs.send(new ListTasksCommand(params))
+      const result = await this.ecsClient.send(new ListTasksCommand(params))
       allArns.push(...(result.taskArns || []))
       nextToken = result.nextToken
     } while (nextToken)
@@ -380,7 +625,7 @@ class Ecs {
     let nextToken
 
     do {
-      const result = await this.#ecs.send(new ListServicesCommand({
+      const result = await this.ecsClient.send(new ListServicesCommand({
         cluster: namespace,
         maxResults: 100,
         nextToken
@@ -398,7 +643,7 @@ class Ecs {
     // DescribeTasks accepts max 100 at a time
     for (let i = 0; i < taskArns.length; i += 100) {
       const batch = taskArns.slice(i, i + 100)
-      const { tasks } = await this.#ecs.send(new DescribeTasksCommand({
+      const { tasks } = await this.ecsClient.send(new DescribeTasksCommand({
         cluster: namespace,
         tasks: batch,
         include: ['TAGS']
@@ -422,7 +667,7 @@ class Ecs {
     let paginationToken
 
     do {
-      const result = await this.#tagging.send(new GetResourcesCommand({
+      const result = await this.taggingClient.send(new GetResourcesCommand({
         ResourceTypeFilters: [resourceType],
         TagFilters: tagFilters,
         ResourcesPerPage: 100,

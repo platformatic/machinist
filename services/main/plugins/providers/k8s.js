@@ -4,6 +4,7 @@ const { readFile } = require('node:fs/promises')
 const fp = require('fastify-plugin')
 const pluralize = require('pluralize')
 const K8sClient = require('../../lib/k8s-client')
+const errors = require('../../errors')
 
 const SCHEMA = {
   type: 'object',
@@ -291,6 +292,12 @@ class K8s {
   // needs only create + patch. fieldManager marks ICC as the owner and force
   // takes ownership of any conflicting fields. The manifest carries apiVersion +
   // kind, as SSA requires.
+  // Kubernetes takes fully rendered manifests on /controllers, /services and
+  // /secrets instead, because a Deployment is self-contained (ECS-SUPPORT.md D1).
+  async applyWorkload () {
+    throw new errors.NotImplementedByProvider('Neutral workload spec (applyWorkload)', 'k8s')
+  }
+
   async applySecret (namespace, secret) {
     const name = secret.metadata.name
     const path = `/api/v1/namespaces/${namespace}/secrets/${name}?fieldManager=icc&force=true`

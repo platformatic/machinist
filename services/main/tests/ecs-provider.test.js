@@ -2,8 +2,19 @@
 
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
-const ecsSdk = require('@aws-sdk/client-ecs')
+const { mockClient } = require('aws-sdk-client-mock')
+const { ECSClient, DescribeTasksCommand } = require('@aws-sdk/client-ecs')
 const { Ecs } = require('../plugins/providers/ecs')
+
+// Replace an Ecs instance's ECS client with a mock and return the recorded
+// calls, so tests can assert which command was sent and with what input.
+// The provider exposes ecsClient publicly for exactly this reason.
+function mockEcsClient (ecs, command, response) {
+  const mock = mockClient(ECSClient)
+  mock.on(command).resolves(response)
+  ecs.ecsClient = mock
+  return mock
+}
 
 function mockTask (overrides = {}) {
   return {
@@ -116,21 +127,12 @@ test('Ecs#formatMachine extracts correct fields from ECS task', async () => {
   assert.strictEqual(task.tags[0].key, 'app.kubernetes.io/name')
 })
 
-// Drive the real Ecs#formatMachine via getMachine with the ECS client's send()
-// stubbed, so we exercise the actual field mapping (the mock provider above
-// bypasses it).
+// Drive the real Ecs#formatMachine via getMachine against a mocked ECS client,
+// so we exercise the actual field mapping (the mock provider above bypasses it).
 async function getMachineWithTask (task) {
-  const originalSend = ecsSdk.ECSClient.prototype.send
-  ecsSdk.ECSClient.prototype.send = async () => ({ tasks: [task], failures: [] })
-  try {
-    const ecs = new Ecs({
-      config: { PLT_ECS_REGION: 'us-east-1', PLT_ECS_CLUSTER: 'my-cluster' },
-      log: { debug () {} }
-    })
-    return await ecs.getMachine('my-cluster', task.taskArn)
-  } finally {
-    ecsSdk.ECSClient.prototype.send = originalSend
-  }
+  const ecs = buildEcs()
+  mockEcsClient(ecs, DescribeTasksCommand, { tasks: [task], failures: [] })
+  return ecs.getMachine('my-cluster', task.taskArn)
 }
 
 test('Ecs#formatMachine surfaces the container imageDigest', async () => {
@@ -145,6 +147,42 @@ test('Ecs#formatMachine omits imageDigest when the task container has none', asy
   const machine = await getMachineWithTask(mockTask()) // default container carries no imageDigest
   assert.strictEqual(machine.image, 'myapp:latest')
   assert.strictEqual(machine.imageDigest, undefined)
+})
+
+test('Ecs#getMachine sends DescribeTasks scoped to the namespace and asks for tags', async () => {
+  const ecs = buildEcs()
+  const mock = mockEcsClient(ecs, DescribeTasksCommand, { tasks: [mockTask()], failures: [] })
+
+  await ecs.getMachine('my-cluster', 'abc123')
+
+  const calls = mock.commandCalls(DescribeTasksCommand)
+  assert.strictEqual(calls.length, 1)
+  assert.deepStrictEqual(calls[0].args[0].input, {
+    cluster: 'my-cluster',
+    tasks: ['abc123'],
+    include: ['TAGS']
+  })
+})
+
+test('Ecs honours PLT_ECS_ENDPOINT so tests can target an emulator', async () => {
+  const ecs = new Ecs({
+    config: {
+      PLT_ECS_REGION: 'us-east-1',
+      PLT_ECS_CLUSTER: 'my-cluster',
+      PLT_ECS_ENDPOINT: 'http://localhost:5111'
+    },
+    log: { debug () {} }
+  })
+
+  const endpoint = await ecs.ecsClient.config.endpoint()
+  assert.strictEqual(endpoint.hostname, 'localhost')
+  assert.strictEqual(endpoint.port, 5111)
+})
+
+test('Ecs leaves the endpoint at the AWS default when PLT_ECS_ENDPOINT is unset', async () => {
+  const ecs = buildEcs()
+  // No override, so the SDK resolves the regional endpoint itself at call time.
+  assert.strictEqual(ecs.ecsClient.config.endpoint, undefined)
 })
 
 test('task.group parsing extracts service name', async () => {
