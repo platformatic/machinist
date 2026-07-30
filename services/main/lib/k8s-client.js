@@ -1,12 +1,13 @@
 'use strict'
 
+const { readFile } = require('node:fs/promises')
 const { setTimeout } = require('node:timers/promises')
 const { request, Agent } = require('undici')
 const { k8sError } = require('../errors')
 
 class K8sClient {
   #dispatcher
-  #authHeaders = {}
+  #tokenPath
   #apiUrl
   #log
 
@@ -17,7 +18,7 @@ class K8sClient {
       clientCert,
       clientKey,
       caCert,
-      bearerToken,
+      tokenPath,
       apiUrl,
       log
     } = config
@@ -33,7 +34,7 @@ class K8sClient {
       tls.key = clientKey
       tls.cert = clientCert
     } else {
-      this.#authHeaders = { Authorization: `Bearer ${bearerToken}` }
+      this.#tokenPath = tokenPath
     }
 
     this.#apiUrl = apiUrl
@@ -45,15 +46,24 @@ class K8sClient {
     })
   }
 
+  // Re-read on every call rather than caching: kubelet rotates the projected
+  // service account token in place (bound tokens expire, e.g. ~24h on EKS 1.35+),
+  // and this process can outlive that window. The file is on a tmpfs-backed
+  // volume, so the read is effectively free.
+  async #getAuthHeaders () {
+    if (!this.#tokenPath) return {}
+    const token = (await readFile(this.#tokenPath, 'utf8')).trim()
+    return { Authorization: `Bearer ${token}` }
+  }
+
   async request (path, overrides = {}, retryCount = 0) {
-    // TODO may need to recreate dispatcher https://kubernetes.io/docs/concepts/security/service-accounts/#authenticating-credentials
     const opts = {
       ...overrides,
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
         'User-Agent': 'platformatic/machinist/v3.0.0',
-        ...this.#authHeaders,
+        ...(await this.#getAuthHeaders()),
         ...(overrides.headers || {})
       },
       dispatcher: this.#dispatcher
@@ -111,7 +121,7 @@ class K8sClient {
       headers: {
         Accept: 'application/json;stream=watch',
         'User-Agent': 'platformatic/machinist/v3.0.0',
-        ...this.#authHeaders,
+        ...(await this.#getAuthHeaders()),
         ...headers
       },
       signal,

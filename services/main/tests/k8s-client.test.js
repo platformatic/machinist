@@ -2,6 +2,10 @@
 
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const { mkdtempSync, writeFileSync } = require('node:fs')
+const { writeFile } = require('node:fs/promises')
+const os = require('node:os')
+const path = require('node:path')
 const fastify = require('fastify')
 const K8sClient = require('../lib/k8s-client')
 
@@ -11,6 +15,10 @@ const mockLogger = {
   info: () => {},
   debug: () => {}
 }
+
+const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'k8s-client-test-'))
+const tokenFile = path.join(tmpDir, 'token')
+writeFileSync(tokenFile, 'fake-token')
 
 test('K8sClient retry logic on connection reset', async t => {
   const app = fastify({ logger: false })
@@ -38,7 +46,7 @@ test('K8sClient retry logic on connection reset', async t => {
     authType: 'token',
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
-    bearerToken: 'fake-token',
+    tokenPath: tokenFile,
     apiUrl,
     log: mockLogger
   })
@@ -68,7 +76,7 @@ test('K8sClient fails after max retries on connection reset', async t => {
     authType: 'token',
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
-    bearerToken: 'fake-token',
+    tokenPath: tokenFile,
     apiUrl,
     log: mockLogger
   })
@@ -105,7 +113,7 @@ test('K8sClient does not retry HTTP errors', async t => {
     authType: 'token',
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
-    bearerToken: 'fake-token',
+    tokenPath: tokenFile,
     apiUrl,
     log: mockLogger
   })
@@ -122,10 +130,81 @@ test('K8sClient has clientTtl configured', t => {
     authType: 'token',
     allowSelfSignedCert: true,
     caCert: 'fake-ca',
-    bearerToken: 'fake-token',
+    tokenPath: tokenFile,
     apiUrl: 'http://localhost:8080',
     log: mockLogger
   })
 
   assert.ok(client, 'Client should be created')
+})
+
+test('K8sClient re-reads the token file on every request (survives rotation)', async t => {
+  const app = fastify({ logger: false })
+
+  const seenAuth = []
+  app.get('/whoami', async (request) => {
+    seenAuth.push(request.headers.authorization)
+    return { ok: true }
+  })
+
+  await app.listen({ port: 0, host: '127.0.0.1' })
+
+  t.after(async () => {
+    await app.close()
+  })
+
+  const apiUrl = `http://127.0.0.1:${app.server.address().port}`
+
+  const rotatingToken = path.join(tmpDir, 'rotating-token')
+  await writeFile(rotatingToken, 'token-1')
+
+  const client = new K8sClient({
+    authType: 'token',
+    allowSelfSignedCert: true,
+    caCert: 'fake-ca',
+    tokenPath: rotatingToken,
+    apiUrl,
+    log: mockLogger
+  })
+
+  await client.request('/whoami')
+
+  // Simulate kubelet rotating the projected token in place.
+  await writeFile(rotatingToken, 'token-2')
+  await client.request('/whoami')
+
+  assert.deepStrictEqual(
+    seenAuth,
+    ['Bearer token-1', 'Bearer token-2'],
+    'token must be re-read from disk per request, not cached at construction'
+  )
+})
+
+test('K8sClient sends no Authorization header for client-cert auth', async t => {
+  const app = fastify({ logger: false })
+
+  let seenAuth = 'unset'
+  app.get('/nocreds', async (request) => {
+    seenAuth = request.headers.authorization ?? null
+    return { ok: true }
+  })
+
+  await app.listen({ port: 0, host: '127.0.0.1' })
+
+  t.after(async () => {
+    await app.close()
+  })
+
+  const apiUrl = `http://127.0.0.1:${app.server.address().port}`
+
+  const client = new K8sClient({
+    authType: 'client-cert',
+    allowSelfSignedCert: true,
+    caCert: 'fake-ca',
+    apiUrl,
+    log: mockLogger
+  })
+
+  await client.request('/nocreds')
+  assert.strictEqual(seenAuth, null, 'client-cert auth must not send a bearer token')
 })

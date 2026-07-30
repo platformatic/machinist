@@ -21,7 +21,7 @@ const SCHEMA = {
 
 // TODO(mzugm): only latest verions of k8s are supported, need to add support for older versions
 class K8s {
-  constructor ({ config, log, caContent, token, authType, clientCreds }) {
+  constructor ({ config, log, caContent, tokenPath, authType, clientCreds }) {
     this.log = log
     this.config = config
     this.apiClient = new K8sClient({
@@ -30,7 +30,7 @@ class K8s {
       clientCert: clientCreds.cert,
       clientKey: clientCreds.key,
       caCert: caContent,
-      bearerToken: token,
+      tokenPath,
       apiUrl: config.PLT_K8S_REST_API_URL,
       log
     })
@@ -245,9 +245,13 @@ async function plugin (fastify, opts) {
 
   const caContent = (await readFile(appConfig.PLT_K8S_CA_PATH, 'utf8')).trim()
   const authType = appConfig.PLT_K8S_AUTH_TYPE
-  let token, clientCert, clientKey
+  let tokenPath, clientCert, clientKey
   if (authType === 'token') {
-    token = (await readFile(appConfig.PLT_K8S_TOKEN_PATH, 'utf8')).trim()
+    tokenPath = appConfig.PLT_K8S_TOKEN_PATH
+    // Fail fast at startup if the token file is missing/unreadable. The value is
+    // NOT cached: K8sClient re-reads tokenPath on every request so it keeps
+    // working after the kubelet rotates the projected token.
+    await readFile(tokenPath, 'utf8')
   } else {
     clientKey = Buffer.from(appConfig.PLT_K8S_CLIENT_KEY, 'base64').toString()
     clientCert = Buffer.from(appConfig.PLT_K8S_CLIENT_CERT, 'base64').toString()
@@ -255,7 +259,7 @@ async function plugin (fastify, opts) {
 
   const k8s = new K8s({
     caContent,
-    token,
+    tokenPath,
     authType,
     clientCreds: { key: clientKey, cert: clientCert },
     config: appConfig,
