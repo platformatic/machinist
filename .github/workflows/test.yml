@@ -31,6 +31,7 @@ jobs:
       uses: AbsaOSS/k3d-action@v2
       with:
         cluster-name: plt-machinist-test
+        k3d-version: v5.8.3
 
     - name: Build and import test image
       run: |
