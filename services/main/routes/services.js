@@ -4,6 +4,10 @@ const serviceEndpointSchema = {
   type: 'object',
   properties: {
     name: { type: 'string' },
+    // Where the service can actually be reached, when the provider knows: Cloud
+    // Map on ECS. Undeclared properties are stripped during serialisation, so
+    // leaving this out silently undoes the provider reporting it.
+    hostname: { type: 'string' },
     labels: {
       type: 'object',
       additionalProperties: { type: 'string' }

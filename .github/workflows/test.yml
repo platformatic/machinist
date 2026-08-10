@@ -4,7 +4,7 @@ on: [pull_request, workflow_call, workflow_dispatch]
 jobs:
   run-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
     - uses: actions/checkout@v7
 
@@ -34,12 +34,25 @@ jobs:
         k3d-version: v5.8.3
 
     - name: Install Gateway API CRDs
-      run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+      run: pnpm --filter machinist test:install-crds
 
     - name: Build and import test image
       run: |
-        docker build . -t platformatic/machinist-test:latest -f Dockerfile.tests
-        k3d image import platformatic/machinist-test:latest -c plt-machinist-test --verbose
+        pnpm --filter machinist test:build-image
+        pnpm --filter machinist test:import-image
 
     - name: Run test suite
       run: pnpm test:unit
+
+    # The ECS provider's routing is asserted against an emulated ALB rather than
+    # against SDK stubs, so the emulator has to be up before the suite runs. It
+    # fails rather than skips when it is missing, which is the point.
+    - name: Start the AWS emulator
+      run: pnpm --filter machinist test:compose-up
+
+    - name: Run ECS/ALB end-to-end suite
+      run: pnpm --filter machinist test:e2e:ecs
+
+    - name: Stop the AWS emulator
+      if: always()
+      run: pnpm --filter machinist test:compose-down

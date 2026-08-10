@@ -186,6 +186,13 @@ class K8s {
     return items
   }
 
+  // Kubernetes renders the plan into an HTTPRoute inside ICC and applies that,
+  // so it never receives a plan. Declared so the route returns a clear 501
+  // rather than a TypeError if one is ever sent here.
+  async applyRoutePlan () {
+    throw new errors.NotImplementedByProvider('Route plan (applyRoutePlan)', 'k8s')
+  }
+
   async applyHTTPRoute (namespace, httpRoute) {
     const name = httpRoute.metadata.name
     const basePath = `/apis/gateway.networking.k8s.io/v1/namespaces/${namespace}/httproutes`

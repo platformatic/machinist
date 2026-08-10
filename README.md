@@ -242,7 +242,14 @@ The provider uses the AWS SDK default credential chain:
 PLT_PROVIDER=ecs                          Provider selection
 PLT_ECS_REGION=us-east-1                  AWS region
 PLT_ECS_CLUSTER=my-cluster                ECS cluster name
+PLT_ECS_LISTENER_ARN=arn:aws:...          ALB listener for skew-protection routing (optional)
 ```
+
+`PLT_ECS_LISTENER_ARN` is the shared ALB listener that skew-protection routing
+programs. It is provisioned outside machinist, by the deployment's own
+infrastructure stack, and machinist only discovers and writes rules on it. Leave
+it unset to run without version routing: `listGateways` then reports nothing,
+which is the same situation as a Kubernetes cluster with no Gateway resource.
 
 ### Required IAM permissions
 
@@ -252,7 +259,8 @@ PLT_ECS_CLUSTER=my-cluster                ECS cluster name
   "Action": [
     "ecs:ListTasks", "ecs:DescribeTasks",
     "ecs:ListServices", "ecs:DescribeServices",
-    "ecs:UpdateService", "ecs:DeleteService",
+    "ecs:CreateService", "ecs:UpdateService", "ecs:DeleteService",
+    "ecs:RegisterTaskDefinition",
     "ecs:TagResource", "ecs:UntagResource",
     "ecs:ListTagsForResource",
     "tag:GetResources"
@@ -260,6 +268,56 @@ PLT_ECS_CLUSTER=my-cluster                ECS cluster name
   "Resource": "*"
 }
 ```
+
+Creating workloads also needs `iam:PassRole` for the execution and task roles
+named by `PLT_ECS_EXECUTION_ROLE_ARN` and `PLT_ECS_TASK_ROLE_ARN`, scoped to
+those two role ARNs. Private images add `secretsmanager:CreateSecret`, `secretsmanager:PutSecretValue`,
+`secretsmanager:DeleteSecret` and `secretsmanager:RestoreSecret`. Cloud Map
+addressing adds `servicediscovery:ListServices`, `servicediscovery:CreateService`,
+`servicediscovery:GetNamespace`, `servicediscovery:DeleteService`,
+`servicediscovery:ListInstances` and `servicediscovery:DeregisterInstance`.
+
+The delete permissions are not optional extras: deleting a version removes the
+Cloud Map service and the pull secret it created, and without them each expired
+version leaves both behind for the lifetime of the application.
+
+Skew-protection routing needs these in addition. They are only required when
+`PLT_ECS_LISTENER_ARN` is set:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "elasticloadbalancing:DescribeListeners",
+    "elasticloadbalancing:DescribeLoadBalancers",
+    "elasticloadbalancing:DescribeRules",
+    "elasticloadbalancing:DescribeTargetGroups",
+    "elasticloadbalancing:DescribeTargetHealth",
+    "elasticloadbalancing:CreateRule",
+    "elasticloadbalancing:DeleteRule",
+    "elasticloadbalancing:CreateTargetGroup",
+    "elasticloadbalancing:DeleteTargetGroup",
+    "elasticloadbalancing:AddTags",
+    "elasticloadbalancing:DescribeTags"
+  ],
+  "Resource": "*"
+}
+```
+
+`CreateRule` and `DeleteRule` can be scoped to the listener ARN. The `Describe*`
+actions cannot: ELB does not support resource-level permissions on them, so they
+have to stay on `*`.
+
+Machinist creates one target group per version and attaches it in the same
+`CreateService` call that creates the workload. Attaching one to a service that
+already exists is an `UpdateService` on `loadBalancers`, which restarts its
+tasks -- on a draining version that would destroy the sessions skew protection
+exists to preserve -- so creation is the only moment it is free. The group is
+deleted with the version, because target groups per load balancer is 100 and is
+not adjustable.
+
+No `RegisterTargets` permission is needed or wanted: ECS registers and
+deregisters the task addresses itself, from the `loadBalancers` on the service.
 
 ## Installation
 
@@ -289,17 +347,90 @@ kubectl --namespace <your-namespace> apply -f infra/machinist.yaml
 
 ## Testing
 
-### K8s integration tests
+There are two suites, with different dependencies:
 
-Requires [k3d](https://k3d.io/stable/#installation) and
-[kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl).
+| Suite | Command | Needs |
+|---|---|---|
+| Unit and K8s integration | `pnpm test:unit` | the `plt-machinist-test` K3d cluster |
+| ECS provider routing (end to end) | `pnpm test:e2e:ecs` | the emulator stack from `docker-compose.yml` |
+
+`pnpm test` prepares both, runs both, and always cleans up, including after a
+failure. It requires Docker, [k3d](https://k3d.io/stable/#installation), and
+[kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl). Use Node.js 24,
+pnpm 11, and k3d 5.8.3 to match CI.
+
+Run these commands from the repository root:
 
 ```sh
-pnpm test              # Full cycle: create cluster, run tests, destroy cluster
-pnpm test:setup        # Create cluster only
-pnpm test:unit         # Run tests only
-pnpm test:teardown     # Destroy cluster only
+pnpm test             # Prepare everything, run both suites, clean up
+pnpm test:setup       # Prepare the cluster, CRDs, test image, and emulator
+pnpm test:unit        # Unit and K8s tests against an already-prepared cluster
+pnpm test:e2e:ecs     # ECS/ALB tests against an already-running emulator
+pnpm test:teardown    # Destroy the test cluster and the emulator stack
 ```
+
+The cluster name `plt-machinist-test` is reserved for this suite and is removed
+at the end of the run. The existing `plt-development` cluster is not touched.
+Run `pnpm lint` separately for the same lint check CI performs before the suite.
+
+### K8s integration tests
+
+`test:setup` creates the `plt-machinist-test` K3d cluster, installs the Gateway
+API CRDs, and builds and imports `platformatic/machinist-test:latest`. CI does
+the same, with the cluster created by `k3d-action` instead.
+
+### ECS provider routing tests
+
+The ECS provider programs ALB listener rules rather than Kubernetes objects, so
+these tests run it against [floci](https://github.com/floci-io/floci), an AWS
+emulator with a real ALB data plane. They assert both that the API accepts the
+rules the provider creates and that those rules route real traffic to the right
+backend. LocalStack cannot stand in for it: ELBv2 is a licensed service there.
+
+`docker-compose.yml` at the repository root defines the stack, started by
+`test:setup` and by CI:
+
+- **floci** on **4566** (the AWS API) and **8081** (the ALB listener the tests
+  create). Both ports must be free.
+- Two BusyBox backends on fixed addresses in `172.30.0.0/24`, registered as the
+  IP targets of the per-version target groups.
+
+Images are pinned: the emulator is the reference these tests measure against, so
+a floating tag could change what routing is asserted to do without a commit.
+
+`pnpm test:e2e:ecs` **fails** rather than skips when the stack is not running,
+so a suite cannot report success without having executed anything. The tests
+live in `services/main/tests/e2e/`, outside the `tests/*.test.js` unit glob, so
+`test:unit` never picks them up.
+
+What they do not cover: ECS tasks do not serve the traffic, the machinist HTTP
+route-plan endpoint is not exercised, and neither is ICC-to-machinist
+communication or ECS task discovery.
+
+### Conformance probe against real AWS
+
+The emulator is a reimplementation, and a known divergent one, so authoritative
+ALB matching semantics need a real load balancer.
+`services/main/scripts/probe-alb-query-routing.sh` asks for them. It is run by
+hand, against an account, and is not part of any suite:
+
+```sh
+./services/main/scripts/probe-alb-query-routing.sh --listener <arn> --yes
+```
+
+It needs one existing HTTP/HTTPS listener and permission to create, tag and
+delete rules on it -- no target groups and no backends, because every rule it
+creates answers with `fixed-response`, which isolates matching from forwarding.
+It is safe against a live listener by construction: rules are scoped to the host
+`plt-skew-probe.invalid`, which no real client sends, tagged
+`plt.dev/managed-by=icc-probe` so they cannot be mistaken for the rules ICC
+manages, allocated into free priorities, and removed on every exit path. It does
+briefly consume 3 of the listener's rule quota.
+
+It asserts the semantics ICC depends on, and separately *records* the answers to
+questions the emulator cannot settle: a repeated key with conflicting values,
+the case of the key itself, and wildcards in a request. Quotas are not probed;
+read those from Service Quotas.
 
 ### ECS unit tests
 

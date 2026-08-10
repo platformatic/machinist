@@ -1,0 +1,54 @@
+# Test dependencies for the ECS provider suite (tests/ecs-alb-e2e.test.js).
+#
+# floci is an AWS emulator with a real ALB data plane, so the tests can assert
+# that the rules the provider creates actually route traffic, not just that they
+# have the right shape. LocalStack cannot do this: ELBv2 is licensed there.
+#
+# The backends have fixed addresses because an ALB IP target group needs an
+# address, and reading one back out of docker would put container plumbing in
+# the tests. The topology lives here; the tests only speak AWS.
+#
+# Both images are pinned. The emulator IS the reference these tests measure
+# against, so a floating tag would let an upstream release change what routing
+# is asserted to do, overnight and without a commit.
+name: machinist-tests
+
+services:
+  floci:
+    image: floci/floci:1.6.0
+    ports:
+      - '4566:4566'   # the AWS API
+      - '8081:8081'   # the ALB listener the tests create
+    networks:
+      plt:
+        ipv4_address: 172.30.0.10
+
+  echo-v1:
+    image: busybox:1.37.0
+    command: sh -c "mkdir -p /www && echo v1 > /www/index.html && httpd -f -p 8080 -h /www"
+    networks:
+      plt:
+        ipv4_address: 172.30.0.11
+
+  echo-v2:
+    image: busybox:1.37.0
+    command: sh -c "mkdir -p /www && echo v2 > /www/index.html && httpd -f -p 8080 -h /www"
+    networks:
+      plt:
+        ipv4_address: 172.30.0.12
+
+  # Stands in for the tasks of a version that applyWorkload creates: the
+  # emulator registers no real containers, so its target group is given this
+  # address by hand.
+  echo-v4:
+    image: busybox:1.37.0
+    command: sh -c "mkdir -p /www && echo v4 > /www/index.html && httpd -f -p 8080 -h /www"
+    networks:
+      plt:
+        ipv4_address: 172.30.0.13
+
+networks:
+  plt:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

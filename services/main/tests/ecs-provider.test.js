@@ -425,9 +425,11 @@ const NOT_SUPPORTED = err =>
   err.statusCode === 501 &&
   /ecs/.test(err.message)
 
-test('Ecs#listGateways throws 501 not-implemented', async () => {
+// listGateways is implemented now: it reports the configured ALB listener, or
+// nothing when none is configured. See tests/ecs-gateways.test.js.
+test('Ecs#listGateways reports no gateways when no listener is configured', async () => {
   const ecs = buildEcs()
-  await assert.rejects(() => ecs.listGateways('my-cluster'), NOT_SUPPORTED)
+  assert.deepStrictEqual(await ecs.listGateways('my-cluster'), [])
 })
 
 test('Ecs#applyHTTPRoute throws 501 not-implemented', async () => {
@@ -435,9 +437,11 @@ test('Ecs#applyHTTPRoute throws 501 not-implemented', async () => {
   await assert.rejects(() => ecs.applyHTTPRoute('my-cluster', {}), NOT_SUPPORTED)
 })
 
-test('Ecs#deleteHTTPRoute throws 501 not-implemented', async () => {
+// deleteHTTPRoute is implemented now: it removes the listener rules ICC owns for
+// the application. With no listener configured there is nothing to remove.
+test('Ecs#deleteHTTPRoute is a no-op when no listener is configured', async () => {
   const ecs = buildEcs()
-  await assert.rejects(() => ecs.deleteHTTPRoute('my-cluster', 'foo'), NOT_SUPPORTED)
+  assert.deepStrictEqual(await ecs.deleteHTTPRoute('my-cluster', 'foo'), {})
 })
 
 test('skew protection error message names the operation', async () => {
@@ -467,17 +471,17 @@ async function buildAppWithSkewRoutes (provider) {
   return app
 }
 
-test('GET /ecs/gateway/gateways/:namespace returns 501 from ECS provider', async (t) => {
+// The gateways endpoint is implemented for ECS now. With no listener configured
+// it reports an empty list, which is how the caller learns routing is off.
+test('GET /ecs/gateway/gateways/:namespace returns the configured listeners', async (t) => {
   const ecs = buildEcs()
   const app = await buildAppWithSkewRoutes(ecs)
   t.after(() => app.close())
 
   const res = await app.inject({ method: 'GET', url: '/ecs/gateway/gateways/my-cluster' })
 
-  assert.strictEqual(res.statusCode, 501)
-  const body = res.json()
-  assert.strictEqual(body.code, 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER')
-  assert.match(body.message, /ecs/)
+  assert.strictEqual(res.statusCode, 200)
+  assert.deepStrictEqual(res.json(), [])
 })
 
 test('PUT /ecs/gateway/httproutes/:namespace returns 501 from ECS provider', async (t) => {
@@ -496,7 +500,7 @@ test('PUT /ecs/gateway/httproutes/:namespace returns 501 from ECS provider', asy
   assert.strictEqual(res.json().code, 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER')
 })
 
-test('DELETE /ecs/gateway/httproutes/:namespace/:name returns 501 from ECS provider', async (t) => {
+test('DELETE /ecs/gateway/httproutes/:namespace/:name removes ICC-managed rules', async (t) => {
   const ecs = buildEcs()
   const app = await buildAppWithSkewRoutes(ecs)
   t.after(() => app.close())
@@ -506,6 +510,6 @@ test('DELETE /ecs/gateway/httproutes/:namespace/:name returns 501 from ECS provi
     url: '/ecs/gateway/httproutes/my-cluster/foo'
   })
 
-  assert.strictEqual(res.statusCode, 501)
-  assert.strictEqual(res.json().code, 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER')
+  assert.strictEqual(res.statusCode, 200)
+  assert.deepStrictEqual(res.json(), {})
 })
