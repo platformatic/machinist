@@ -107,6 +107,23 @@ function managedRule (arn, app = 'myapp') {
   return { RuleArn: arn, Tags: [{ Key: 'plt.dev/managed-by', Value: 'icc' }, { Key: 'plt.dev/application', Value: app }] }
 }
 
+function bootstrapRule (arn, versionId, priority = '2') {
+  return {
+    ...managedRule(arn),
+    Priority: priority,
+    Conditions: [{
+      Field: 'http-header',
+      HttpHeaderConfig: { HttpHeaderName: 'x-platformatic-bootstrap', Values: ['token'] }
+    }],
+    Actions: [{ Type: 'forward', TargetGroupArn: `arn:tg/${versionId}` }],
+    Tags: [
+      ...managedRule(arn).Tags,
+      { Key: 'plt.dev/version', Value: versionId },
+      { Key: 'plt.dev/purpose', Value: 'bootstrap' }
+    ]
+  }
+}
+
 test('applies the plan by creating one rule per plan rule', async () => {
   const result = await withAws({ services: SERVICES }, calls =>
     buildEcs().applyRoutePlan('my-cluster', plan).then(r => ({ r, calls }))
@@ -136,6 +153,58 @@ test('deletes the app rules it already owns before creating', async () => {
     const firstCreate = calls.findIndex(c => c.name === 'CreateRuleCommand')
     const lastDelete = calls.map(c => c.name).lastIndexOf('DeleteRuleCommand')
     assert.ok(lastDelete < firstCreate)
+  })
+})
+
+test('preserves a bootstrap rule until its version appears in the route plan', async () => {
+  await withAws({
+    services: SERVICES,
+    existingRules: [bootstrapRule('arn:rule/bootstrap-v3', 'v3')]
+  }, async calls => {
+    await buildEcs().applyRoutePlan('my-cluster', plan)
+
+    const deleted = calls.filter(call => call.name === 'DeleteRuleCommand')
+    assert.strictEqual(deleted.length, 0, 'an old-plan reconcile must not break a pending CreateService')
+    assert.deepStrictEqual(
+      calls.filter(call => call.name === 'CreateRuleCommand').map(call => call.input.Priority),
+      [3, 4, 5],
+      'the preserved bootstrap priority remains occupied'
+    )
+  })
+})
+
+test('replaces a bootstrap rule when its version is in the route plan', async () => {
+  await withAws({
+    services: SERVICES,
+    existingRules: [bootstrapRule('arn:rule/bootstrap-v1', 'v1')]
+  }, async calls => {
+    await buildEcs().applyRoutePlan('my-cluster', plan)
+
+    assert.deepStrictEqual(
+      calls.filter(call => call.name === 'DeleteRuleCommand').map(call => call.input.RuleArn),
+      ['arn:rule/bootstrap-v1']
+    )
+  })
+})
+
+test('does not report a bootstrap association as a live HTTP route', async () => {
+  await withAws({
+    existingRules: [bootstrapRule('arn:rule/bootstrap-v3', 'v3')]
+  }, async () => {
+    assert.strictEqual(await buildEcs().getHTTPRoute('my-cluster', 'myapp'), null)
+  })
+})
+
+test('route deletion removes bootstrap rules too', async () => {
+  await withAws({
+    existingRules: [bootstrapRule('arn:rule/bootstrap-v3', 'v3')]
+  }, async calls => {
+    const result = await buildEcs().deleteHTTPRoute('my-cluster', 'myapp')
+    assert.strictEqual(result.deleted, 1)
+    assert.deepStrictEqual(
+      calls.filter(call => call.name === 'DeleteRuleCommand').map(call => call.input.RuleArn),
+      ['arn:rule/bootstrap-v3']
+    )
   })
 })
 

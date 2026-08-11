@@ -171,6 +171,8 @@ const DISCOVERY_DELETE_ATTEMPTS = 4
 // A forced secret deletion is asynchronous, so recreating the same name can be
 // refused for a moment afterwards.
 const SECRET_ATTEMPTS = 4
+const BOOTSTRAP_PURPOSE_TAG = 'plt.dev/purpose'
+const BOOTSTRAP_PURPOSE_VALUE = 'bootstrap'
 
 function ecsName (name) {
   const original = String(name)
@@ -464,6 +466,15 @@ class Ecs {
     if (!targetGroupArn) return
 
     try {
+      // Usually ICC has already removed the route plan. This also covers a
+      // deployment that failed or was deleted before registration: its
+      // bootstrap rule is still the association that would make AWS reject
+      // DeleteTargetGroup. Only ICC-owned rules pointing at this exact group
+      // are touched; customer rules on the shared listener remain intact.
+      const { mine } = await this.#partitionRules()
+      for (const rule of mine.filter(rule => this.#ruleTargets(rule, targetGroupArn))) {
+        await this.elbClient.send(new DeleteRuleCommand({ RuleArn: rule.RuleArn }))
+      }
       await this.elbClient.send(new DeleteTargetGroupCommand({ TargetGroupArn: targetGroupArn }))
     } catch (err) {
       // A target group still referenced by a listener rule cannot be deleted.
@@ -475,6 +486,13 @@ class Ecs {
         err, serviceName, targetGroupArn
       }, 'could not delete the version target group; it will count against the per-load-balancer quota until removed')
     }
+  }
+
+  #ruleTargets (rule, targetGroupArn) {
+    return (rule.Actions ?? []).some(action =>
+      action.TargetGroupArn === targetGroupArn ||
+      (action.ForwardConfig?.TargetGroups ?? []).some(group => group.TargetGroupArn === targetGroupArn)
+    )
   }
 
   // ── Service operations ──
@@ -543,21 +561,38 @@ class Ecs {
     // UpdateService that restarts its tasks, which on a draining version would
     // destroy exactly the sessions skew protection exists to preserve. Creation
     // is the only moment it is free (ECS-SUPPORT.md D5, skew plan F2).
-    const loadBalancer = await this.#ensureTargetGroup(spec)
+    const targetGroup = await this.#ensureTargetGroup(spec)
+    const loadBalancer = targetGroup
+      ? {
+          targetGroupArn: targetGroup.targetGroupArn,
+          containerName: targetGroup.containerName,
+          containerPort: targetGroup.containerPort
+        }
+      : null
 
-    const { service } = await this.ecsClient.send(new CreateServiceCommand({
-      cluster: namespace,
-      serviceName: spec.name,
-      taskDefinition: taskDefinitionArn,
-      desiredCount,
-      launchType: 'FARGATE',
-      networkConfiguration: this.#networkConfiguration(),
-      ...(registries.length > 0 ? { serviceRegistries: registries } : {}),
-      ...(loadBalancer ? { loadBalancers: [loadBalancer] } : {}),
-      ...(tags.length > 0 ? { tags } : {}),
-      propagateTags: 'SERVICE',
-      enableECSManagedTags: true
-    }))
+    let service
+    try {
+      const created = await this.ecsClient.send(new CreateServiceCommand({
+        cluster: namespace,
+        serviceName: spec.name,
+        taskDefinition: taskDefinitionArn,
+        desiredCount,
+        launchType: 'FARGATE',
+        networkConfiguration: this.#networkConfiguration(),
+        ...(registries.length > 0 ? { serviceRegistries: registries } : {}),
+        ...(loadBalancer ? { loadBalancers: [loadBalancer] } : {}),
+        ...(tags.length > 0 ? { tags } : {}),
+        propagateTags: 'SERVICE',
+        enableECSManagedTags: true
+      }))
+      service = created.service
+    } catch (err) {
+      // The bootstrap rule exists only to satisfy CreateService's ALB
+      // validation. If creation fails, remove it before the new target group;
+      // otherwise the rule pins the group and AWS refuses to delete it.
+      await this.#rollbackTargetGroupBootstrap(targetGroup)
+      throw err
+    }
 
     return {
       name: service.serviceName,
@@ -588,7 +623,14 @@ class Ecs {
 
     const existing = await this.#findTargetGroup(name)
     if (existing) {
-      return { targetGroupArn: existing, containerName: spec.name, containerPort: appPort }
+      const bootstrapRuleArn = await this.#createTargetGroupBootstrap(spec, existing)
+      return {
+        targetGroupArn: existing,
+        containerName: spec.name,
+        containerPort: appPort,
+        bootstrapRuleArn,
+        targetGroupCreated: false
+      }
     }
 
     // The health check mirrors the Kubernetes readiness probe rather than the
@@ -627,7 +669,108 @@ class Ecs {
     const targetGroupArn = TargetGroups[0].TargetGroupArn
     this.log.info({ name, targetGroupArn, service: spec.name }, 'created a target group for the version')
 
-    return { targetGroupArn, containerName: spec.name, containerPort: appPort }
+    let bootstrapRuleArn
+    try {
+      bootstrapRuleArn = await this.#createTargetGroupBootstrap(spec, targetGroupArn)
+    } catch (err) {
+      // A group that was never associated cannot be useful to this workload,
+      // and leaving it behind consumes the hard per-load-balancer quota.
+      try {
+        await this.elbClient.send(new DeleteTargetGroupCommand({ TargetGroupArn: targetGroupArn }))
+      } catch (cleanupErr) {
+        this.log.error({ err: cleanupErr, targetGroupArn },
+          'failed to remove a target group after its bootstrap rule could not be created')
+      }
+      throw err
+    }
+
+    return {
+      targetGroupArn,
+      containerName: spec.name,
+      containerPort: appPort,
+      bootstrapRuleArn,
+      targetGroupCreated: true
+    }
+  }
+
+  // ECS refuses CreateService when its target group is not already associated
+  // with a load balancer. The actual query/header/default rules cannot exist
+  // yet: ICC only learns about the version after its first task starts and
+  // registers. This deliberately unmatchable rule bridges that ordering gap.
+  // It uses the normal ownership tags, so applyRoutePlan's first full resync
+  // deletes it and installs the real rules.
+  async #createTargetGroupBootstrap (spec, targetGroupArn) {
+    const appName = spec.appName ?? spec.labels?.['app.kubernetes.io/name'] ?? spec.name
+    const versionId = spec.labels?.['plt.dev/version']
+    const hostname = spec.labels?.['plt.dev/hostname']
+    const token = createHash('sha256').update(`${spec.name}:${targetGroupArn}`).digest('hex').slice(0, 16)
+    const conditions = [
+      ...(hostname
+        ? [{ Field: 'host-header', HostHeaderConfig: { Values: [hostname] } }]
+        : []),
+      {
+        Field: 'http-header',
+        HttpHeaderConfig: { HttpHeaderName: 'x-platformatic-bootstrap', Values: [token] }
+      }
+    ]
+
+    const MAX_ATTEMPTS = 3
+    let lastError
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const { Rules } = await this.elbClient.send(new DescribeRulesCommand({
+        ListenerArn: this.#listenerArn
+      }))
+      const priority = albRules.allocatePriorityBase(1,
+        (Rules ?? []).filter(rule => !rule.IsDefault).map(rule => rule.Priority))
+
+      try {
+        const { Rules: created } = await this.elbClient.send(new CreateRuleCommand({
+          ListenerArn: this.#listenerArn,
+          Priority: priority,
+          Conditions: conditions,
+          Actions: [{ Type: 'forward', TargetGroupArn: targetGroupArn }],
+          Tags: [
+            ...albRules.tagsFor({ appName }, versionId),
+            { Key: BOOTSTRAP_PURPOSE_TAG, Value: BOOTSTRAP_PURPOSE_VALUE }
+          ]
+        }))
+        const ruleArn = created?.[0]?.RuleArn
+        if (!ruleArn) throw new Error('ALB did not return the bootstrap listener rule ARN')
+        this.log.info({ appName, versionId, targetGroupArn, ruleArn },
+          'associated a version target group with the listener for ECS service creation')
+        return ruleArn
+      } catch (err) {
+        if (err.name !== 'PriorityInUseException') throw err
+        lastError = err
+        if (attempt < MAX_ATTEMPTS) {
+          const backoff = this.#retryBaseMs * (2 ** (attempt - 1))
+          const jittered = Math.round(backoff * (0.5 + Math.random()))
+          if (jittered > 0) await setTimeout(jittered)
+        }
+      }
+    }
+    throw lastError
+  }
+
+  async #rollbackTargetGroupBootstrap (targetGroup) {
+    if (!targetGroup) return
+
+    if (targetGroup.bootstrapRuleArn) {
+      try {
+        await this.elbClient.send(new DeleteRuleCommand({ RuleArn: targetGroup.bootstrapRuleArn }))
+      } catch (err) {
+        this.log.error({ err, ruleArn: targetGroup.bootstrapRuleArn },
+          'failed to remove an ECS target-group bootstrap rule after service creation failed')
+      }
+    }
+    if (targetGroup.targetGroupCreated) {
+      try {
+        await this.elbClient.send(new DeleteTargetGroupCommand({ TargetGroupArn: targetGroup.targetGroupArn }))
+      } catch (err) {
+        this.log.error({ err, targetGroupArn: targetGroup.targetGroupArn },
+          'failed to remove a target group after service creation failed')
+      }
+    }
   }
 
   async #findTargetGroup (name) {
@@ -1057,14 +1200,24 @@ class Ecs {
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const { mine, others } = await this.#partitionRules(plan.appName)
+      // A workload creates its bootstrap rule before it can register with ICC,
+      // so a concurrent reconcile still carries the old plan. Preserve
+      // bootstrap rules for versions absent from that plan; deleting one in
+      // this window makes ECS reject the pending CreateService. Once the
+      // version appears in the plan, this resync replaces its bootstrap rule
+      // with the real route like every other owned rule.
+      const plannedVersions = new Set(plan.rules.map(rule => rule.versionId))
+      const preserved = mine.filter(rule =>
+        this.#isBootstrapRule(rule) && !plannedVersions.has(this.#ruleTag(rule, albRules.VERSION_TAG)))
+      const replaced = mine.filter(rule => !preserved.includes(rule))
       const desired = albRules.renderRules(usable, targetGroups, {
         priorityBase: albRules.allocatePriorityBase(
           usable.rules.length,
-          others.map(rule => rule.Priority)
+          [...others, ...preserved].map(rule => rule.Priority)
         )
       })
 
-      for (const rule of mine) {
+      for (const rule of replaced) {
         await this.elbClient.send(new DeleteRuleCommand({ RuleArn: rule.RuleArn }))
       }
 
@@ -1083,12 +1236,12 @@ class Ecs {
 
         this.log.info({
           appName: plan.appName,
-          deleted: mine.length,
+          deleted: replaced.length,
           created: created.length,
           attempt
         }, 'route plan resynced onto the ALB listener')
 
-        return { appName: plan.appName, deleted: mine.length, created: created.length }
+        return { appName: plan.appName, deleted: replaced.length, created: created.length }
       } catch (err) {
         if (err.name !== 'PriorityInUseException') throw err
         lastError = err
@@ -1170,6 +1323,14 @@ class Ecs {
     return mine
   }
 
+  #ruleTag (rule, key) {
+    return (rule.Tags ?? []).find(tag => tag.Key === key)?.Value
+  }
+
+  #isBootstrapRule (rule) {
+    return this.#ruleTag(rule, BOOTSTRAP_PURPOSE_TAG) === BOOTSTRAP_PURPOSE_VALUE
+  }
+
   // The live routing for an application, expressed in the same plan vocabulary
   // ICC sends. Reconstructed from the listener rules ICC owns rather than from a
   // stored copy, so it reflects what is actually serving traffic.
@@ -1179,15 +1340,16 @@ class Ecs {
   async getHTTPRoute (namespace, name) {
     if (!this.#listenerArn) return null
 
-    const rules = await this.#managedRulesFor(name)
+    // The bootstrap association is infrastructure, not part of the live route
+    // plan. Reporting it as a header rule would make a pre-registration
+    // version appear routed when it is not.
+    const rules = (await this.#managedRulesFor(name)).filter(rule => !this.#isBootstrapRule(rule))
     if (rules.length === 0) return null
-
-    const tagValue = (rule, key) => (rule.Tags || []).find(t => t.Key === key)?.Value
 
     // ALB returns rules in priority order within a listener; the plan's own
     // order is priority order too, so this round-trips.
     const planRules = rules.map(rule => ({
-      versionId: tagValue(rule, albRules.VERSION_TAG),
+      versionId: this.#ruleTag(rule, albRules.VERSION_TAG),
       match: { kind: this.#matchKindOf(rule) }
     }))
 

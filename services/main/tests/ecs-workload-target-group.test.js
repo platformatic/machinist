@@ -30,9 +30,13 @@ const {
 const {
   ElasticLoadBalancingV2Client,
   DescribeListenersCommand,
+  DescribeRulesCommand,
+  DescribeTagsCommand,
   DescribeLoadBalancersCommand,
   DescribeTargetGroupsCommand,
   CreateTargetGroupCommand,
+  CreateRuleCommand,
+  DeleteRuleCommand,
   DeleteTargetGroupCommand
 } = require('@aws-sdk/client-elastic-load-balancing-v2')
 const { Ecs } = require('../plugins/providers/ecs')
@@ -50,6 +54,7 @@ const { Ecs } = require('../plugins/providers/ecs')
 const LISTENER_ARN = 'arn:aws:elasticloadbalancing:us-east-1:1:listener/app/plt/lb1/l1'
 const LB_ARN = 'arn:aws:elasticloadbalancing:us-east-1:1:loadbalancer/app/plt/lb1'
 const TG_ARN = 'arn:aws:elasticloadbalancing:us-east-1:1:targetgroup/my-app-v1-abc123/t1'
+const BOOTSTRAP_RULE_ARN = 'arn:aws:elasticloadbalancing:us-east-1:1:listener-rule/app/plt/lb1/l1/bootstrap'
 
 function buildSpec (overrides = {}) {
   return {
@@ -63,7 +68,13 @@ function buildSpec (overrides = {}) {
   }
 }
 
-function buildEcs ({ listenerArn = LISTENER_ARN, existingTargetGroup = false, deleteFails = false } = {}) {
+function buildEcs ({
+  listenerArn = LISTENER_ARN,
+  existingTargetGroup = false,
+  deleteFails = false,
+  createServiceFails = false
+} = {}) {
+  const events = []
   const ecs = new Ecs({
     config: {
       PLT_ECS_REGION: 'us-east-1',
@@ -79,7 +90,17 @@ function buildEcs ({ listenerArn = LISTENER_ARN, existingTargetGroup = false, de
   const ecsMock = mockClient(ECSClient)
   ecsMock.on(RegisterTaskDefinitionCommand).resolves({ taskDefinition: { taskDefinitionArn: 'arn:td/1' } })
   ecsMock.on(DescribeServicesCommand).resolves({ services: [] })
-  ecsMock.on(CreateServiceCommand).callsFake(input => ({ service: { serviceName: input.serviceName, serviceArn: 'arn:svc/1' } }))
+  if (createServiceFails) {
+    ecsMock.on(CreateServiceCommand).callsFake(() => {
+      events.push('create-service')
+      throw new Error('ECS service creation failed')
+    })
+  } else {
+    ecsMock.on(CreateServiceCommand).callsFake(input => {
+      events.push('create-service')
+      return { service: { serviceName: input.serviceName, serviceArn: 'arn:svc/1' } }
+    })
+  }
   ecsMock.on(TagResourceCommand).resolves({})
   ecsMock.on(DeleteServiceCommand).resolves({})
   ecs.ecsClient = ecsMock
@@ -91,6 +112,16 @@ function buildEcs ({ listenerArn = LISTENER_ARN, existingTargetGroup = false, de
 
   const elbMock = mockClient(ElasticLoadBalancingV2Client)
   elbMock.on(DescribeListenersCommand).resolves({ Listeners: [{ ListenerArn: listenerArn, LoadBalancerArn: LB_ARN }] })
+  elbMock.on(DescribeRulesCommand).resolves({ Rules: [] })
+  elbMock.on(DescribeTagsCommand).resolves({ TagDescriptions: [] })
+  elbMock.on(CreateRuleCommand).callsFake(() => {
+    events.push('create-bootstrap-rule')
+    return { Rules: [{ RuleArn: BOOTSTRAP_RULE_ARN }] }
+  })
+  elbMock.on(DeleteRuleCommand).callsFake(() => {
+    events.push('delete-rule')
+    return {}
+  })
   elbMock.on(DescribeLoadBalancersCommand).resolves({ LoadBalancers: [{ LoadBalancerArn: LB_ARN, VpcId: 'vpc-42' }] })
   if (existingTargetGroup) {
     elbMock.on(DescribeTargetGroupsCommand).resolves({ TargetGroups: [{ TargetGroupArn: TG_ARN }] })
@@ -107,15 +138,18 @@ function buildEcs ({ listenerArn = LISTENER_ARN, existingTargetGroup = false, de
     inUse.name = 'ResourceInUseException'
     elbMock.on(DeleteTargetGroupCommand).rejects(inUse)
   } else {
-    elbMock.on(DeleteTargetGroupCommand).resolves({})
+    elbMock.on(DeleteTargetGroupCommand).callsFake(() => {
+      events.push('delete-target-group')
+      return {}
+    })
   }
   ecs.elbClient = elbMock
 
-  return { ecs, ecsMock, elbMock }
+  return { ecs, ecsMock, elbMock, events }
 }
 
 test('a new workload is created already attached to its own target group', async () => {
-  const { ecs, ecsMock } = buildEcs()
+  const { ecs, ecsMock, events } = buildEcs()
 
   const result = await ecs.applyWorkload('my-cluster', buildSpec())
 
@@ -126,6 +160,52 @@ test('a new workload is created already attached to its own target group', async
     containerPort: 3042
   }])
   assert.strictEqual(result.targetGroupArn, TG_ARN)
+  assert.deepStrictEqual(events.slice(0, 2), ['create-bootstrap-rule', 'create-service'])
+})
+
+test('the bootstrap rule associates the target group without matching normal traffic', async () => {
+  const { ecs, elbMock } = buildEcs()
+
+  await ecs.applyWorkload('my-cluster', buildSpec({
+    labels: {
+      'app.kubernetes.io/name': 'my-app',
+      'plt.dev/version': 'v1',
+      'plt.dev/hostname': 'my-app.example.com'
+    }
+  }))
+
+  const { input } = elbMock.commandCalls(CreateRuleCommand)[0].args[0]
+  assert.strictEqual(input.ListenerArn, LISTENER_ARN)
+  assert.deepStrictEqual(input.Actions, [{ Type: 'forward', TargetGroupArn: TG_ARN }])
+  assert.ok(input.Conditions.some(condition =>
+    condition.Field === 'host-header' && condition.HostHeaderConfig.Values.includes('my-app.example.com')))
+  assert.ok(input.Conditions.some(condition =>
+    condition.Field === 'http-header' &&
+    condition.HttpHeaderConfig.HttpHeaderName === 'x-platformatic-bootstrap'))
+
+  const tags = Object.fromEntries(input.Tags.map(tag => [tag.Key, tag.Value]))
+  assert.strictEqual(tags['plt.dev/managed-by'], 'icc')
+  assert.strictEqual(tags['plt.dev/application'], 'my-app')
+  assert.strictEqual(tags['plt.dev/version'], 'v1')
+  assert.strictEqual(tags['plt.dev/purpose'], 'bootstrap')
+})
+
+test('a failed ECS service creation removes the bootstrap rule before the new target group', async () => {
+  const { ecs, elbMock, events } = buildEcs({ createServiceFails: true })
+
+  await assert.rejects(
+    () => ecs.applyWorkload('my-cluster', buildSpec()),
+    /ECS service creation failed/
+  )
+
+  assert.strictEqual(elbMock.commandCalls(DeleteRuleCommand).length, 1)
+  assert.strictEqual(elbMock.commandCalls(DeleteTargetGroupCommand).length, 1)
+  assert.deepStrictEqual(events, [
+    'create-bootstrap-rule',
+    'create-service',
+    'delete-rule',
+    'delete-target-group'
+  ])
 })
 
 test('the target group is created in the load balancer\'s own VPC', async () => {
@@ -209,6 +289,31 @@ test('deleting the workload deletes its target group', async () => {
   assert.deepStrictEqual(
     elbMock.commandCalls(DeleteTargetGroupCommand)[0].args[0].input,
     { TargetGroupArn: TG_ARN }
+  )
+})
+
+test('deleting a workload removes an orphaned bootstrap rule before its target group', async () => {
+  const { ecs, elbMock, events } = buildEcs({ existingTargetGroup: true })
+  elbMock.on(DescribeRulesCommand).resolves({
+    Rules: [{
+      RuleArn: BOOTSTRAP_RULE_ARN,
+      Priority: '2',
+      Actions: [{ Type: 'forward', TargetGroupArn: TG_ARN }]
+    }]
+  })
+  elbMock.on(DescribeTagsCommand).resolves({
+    TagDescriptions: [{
+      ResourceArn: BOOTSTRAP_RULE_ARN,
+      Tags: [{ Key: 'plt.dev/managed-by', Value: 'icc' }]
+    }]
+  })
+
+  await ecs.deleteController('my-cluster', 'my-app-v1')
+
+  assert.deepStrictEqual(events, ['delete-rule', 'delete-target-group'])
+  assert.deepStrictEqual(
+    elbMock.commandCalls(DeleteRuleCommand)[0].args[0].input,
+    { RuleArn: BOOTSTRAP_RULE_ARN }
   )
 })
 
