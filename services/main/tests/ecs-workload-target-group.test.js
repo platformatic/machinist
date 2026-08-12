@@ -25,8 +25,13 @@ const {
   DeleteServiceCommand: DeleteDiscoveryServiceCommand,
   ListInstancesCommand,
   DeregisterInstanceCommand,
-  GetNamespaceCommand
+  GetNamespaceCommand,
+  GetServiceCommand
 } = require('@aws-sdk/client-servicediscovery')
+const {
+  ResourceGroupsTaggingAPIClient,
+  GetResourcesCommand
+} = require('@aws-sdk/client-resource-groups-tagging-api')
 const {
   ElasticLoadBalancingV2Client,
   DescribeListenersCommand,
@@ -399,6 +404,36 @@ test('applyWorkload reports where the workload can be reached', async () => {
   // ICC builds workflow handler URLs from this. On Kubernetes it can derive the
   // address from the service name; on ECS there is no such convention.
   assert.deepStrictEqual(result.endpoint, { hostname: 'my-app-v1.plt.local', port: 3042 })
+})
+
+test('service discovery reports the Cloud Map name when it differs from the ECS service name', async () => {
+  const { ecs, ecsMock } = buildEcs({ listenerArn: null })
+  ecs.config.PLT_ECS_CLOUD_MAP_NAMESPACE_ID = 'ns-1'
+
+  const tagging = mockClient(ResourceGroupsTaggingAPIClient)
+  tagging.on(GetResourcesCommand).resolves({
+    ResourceTagMappingList: [{ ResourceARN: 'arn:aws:ecs:us-east-1:1:service/my-cluster/demo-my-app-v1' }]
+  })
+  ecs.taggingClient = tagging
+
+  ecsMock.on(DescribeServicesCommand).resolves({
+    services: [{
+      serviceName: 'demo-my-app-v1',
+      serviceRegistries: [{ registryArn: 'arn:aws:servicediscovery:us-east-1:1:service/srv-1' }],
+      loadBalancers: [{ containerPort: 3042 }],
+      tags: [{ key: 'app.kubernetes.io/name', value: 'my-app' }]
+    }]
+  })
+
+  const discovery = mockClient(ServiceDiscoveryClient)
+  discovery.on(GetNamespaceCommand).resolves({ Namespace: { Name: 'plt.local' } })
+  discovery.on(GetServiceCommand).resolves({ Service: { Name: 'v-my-app-v1-a1b2c3' } })
+  ecs.discoveryClient = discovery
+
+  const [service] = await ecs.getServicesByLabels('my-cluster', { 'app.kubernetes.io/name': 'my-app' })
+
+  assert.strictEqual(service.name, 'demo-my-app-v1')
+  assert.strictEqual(service.hostname, 'v-my-app-v1-a1b2c3.plt.local')
 })
 
 test('without Cloud Map there is no endpoint to report', async () => {

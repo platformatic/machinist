@@ -46,7 +46,8 @@ const {
   DeleteServiceCommand: DeleteDiscoveryServiceCommand,
   ListInstancesCommand,
   DeregisterInstanceCommand,
-  GetNamespaceCommand
+  GetNamespaceCommand,
+  GetServiceCommand
 } = require('@aws-sdk/client-servicediscovery')
 const albRules = require('../../lib/alb-rules')
 const { createHash } = require('node:crypto')
@@ -188,6 +189,7 @@ class Ecs {
   #listenerArn
   #vpcId = null
   #cloudMapNamespace = null
+  #cloudMapServiceNames = new Map()
   #portsByTaskDefinition = new Map()
   #retryBaseMs
   #cleanupRetryBaseMs
@@ -1489,7 +1491,23 @@ class Ecs {
     const namespaceName = await this.#cloudMapNamespaceName()
     if (!namespaceName) return {}
 
-    return { hostname: `${svc.serviceName}.${namespaceName}` }
+    const registryArn = svc.serviceRegistries[0]?.registryArn
+    const serviceId = registryArn?.split('/').at(-1)
+    if (!serviceId) return {}
+
+    let serviceName = this.#cloudMapServiceNames.get(serviceId)
+    if (!serviceName) {
+      try {
+        const { Service } = await this.discoveryClient.send(new GetServiceCommand({ Id: serviceId }))
+        serviceName = Service?.Name
+        if (serviceName) this.#cloudMapServiceNames.set(serviceId, serviceName)
+      } catch (err) {
+        this.log.error({ err, serviceId }, 'could not read the Cloud Map service')
+        return {}
+      }
+    }
+
+    return serviceName ? { hostname: `${serviceName}.${namespaceName}` } : {}
   }
 
   async #cloudMapNamespaceName () {
