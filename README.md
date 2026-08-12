@@ -411,11 +411,11 @@ communication or ECS task discovery.
 
 The emulator is a reimplementation, and a known divergent one, so authoritative
 ALB matching semantics need a real load balancer.
-`services/main/scripts/probe-alb-query-routing.sh` asks for them. It is run by
+`tools/aws/probe-alb-query-routing.sh` asks for them. It is run by
 hand, against an account, and is not part of any suite:
 
 ```sh
-./services/main/scripts/probe-alb-query-routing.sh --listener <arn> --yes
+./tools/aws/probe-alb-query-routing.sh --listener <arn> --yes
 ```
 
 It needs one existing HTTP/HTTPS listener and permission to create, tag and

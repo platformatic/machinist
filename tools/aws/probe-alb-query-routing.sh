@@ -25,7 +25,7 @@
 #
 # It does temporarily consume 3 of the listener's rule quota.
 #
-#   ./probe-alb-query-routing.sh --listener <arn> --yes
+#   ./tools/aws/probe-alb-query-routing.sh --listener <arn> --yes
 #
 # Record the results next to ecs-skew-protection-plan.md, as T7's were.
 #
@@ -36,6 +36,16 @@ CONFIRMED=""
 HOST=plt-skew-probe.invalid
 PROBE_TAG_KEY=plt.dev/managed-by
 PROBE_TAG_VALUE=icc-probe
+
+# The bodies carry a per-run token. Without it the readiness gate below can be
+# satisfied by the listener's own default response -- a listener answering
+# "active" would look like this probe's catch-all rule already serving -- and a
+# rule left by an interrupted earlier run would be indistinguishable from this
+# one's.
+RUN_ID=$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')
+BODY_ACTIVE="active-$RUN_ID"
+BODY_QUERY="v1-$RUN_ID"
+BODY_HEADER="v1-header-$RUN_ID"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -53,6 +63,7 @@ fi
 
 cleanup () {
   # By tag, so a rule left behind by an interrupted earlier run goes too.
+  # shellcheck disable=SC2016  # the backticks are JMESPath literals, not shell
   aws elbv2 describe-rules --listener-arn "$LISTENER" \
     --query 'Rules[?IsDefault==`false`].RuleArn' --output text 2>/dev/null \
     | tr '\t' '\n' \
@@ -88,6 +99,7 @@ cleanup
 # The lowest free run of three priorities, allocated the same way ICC does it:
 # a fixed base would collide with whatever the listener already carries, and ALB
 # rejects a duplicate priority outright.
+# shellcheck disable=SC2016  # the backticks are JMESPath literals, not shell
 BASE=$(aws elbv2 describe-rules --listener-arn "$LISTENER" \
   --query 'Rules[?IsDefault==`false`].Priority' --output text \
   | tr '\t' '\n' | { grep -E '^[0-9]+$' || true; } \
@@ -113,53 +125,99 @@ host_condition () {
 # listener default (which belongs to the customer and is not touched).
 aws elbv2 create-rule --listener-arn "$LISTENER" --priority "$BASE" \
   --conditions "[$(host_condition),{\"Field\":\"query-string\",\"QueryStringConfig\":{\"Values\":[{\"Key\":\"dpl\",\"Value\":\"v1\"}]}}]" \
-  --actions "$(fixed v1)" \
+  --actions "$(fixed "$BODY_QUERY")" \
   --tags "Key=$PROBE_TAG_KEY,Value=$PROBE_TAG_VALUE" >/dev/null
 
 aws elbv2 create-rule --listener-arn "$LISTENER" --priority "$(( BASE + 1 ))" \
   --conditions "[$(host_condition),{\"Field\":\"http-header\",\"HttpHeaderConfig\":{\"HttpHeaderName\":\"x-deployment-id\",\"Values\":[\"v1\"]}}]" \
-  --actions "$(fixed v1-header)" \
+  --actions "$(fixed "$BODY_HEADER")" \
   --tags "Key=$PROBE_TAG_KEY,Value=$PROBE_TAG_VALUE" >/dev/null
 
 aws elbv2 create-rule --listener-arn "$LISTENER" --priority "$(( BASE + 2 ))" \
   --conditions "[$(host_condition)]" \
-  --actions "$(fixed active)" \
+  --actions "$(fixed "$BODY_ACTIVE")" \
   --tags "Key=$PROBE_TAG_KEY,Value=$PROBE_TAG_VALUE" >/dev/null
 
-# ALB applies rule changes within seconds; give it a moment before asserting.
-sleep 5
 
+# $1 path, $2 optional extra request header.
+#
+# --insecure on purpose. The probe host is deliberately one no certificate
+# covers -- that is what keeps it from matching real traffic -- so on an HTTPS
+# listener curl would reject the ALB's own certificate for a name mismatch.
+# What is under test is which rule matched, not TLS.
 fetch () {
-  curl -sS --max-time 15 -H "Host: $HOST" "$SCHEME://$DNS:$PORT$1" | tr -d '\r\n'
+  if [ -n "${2:-}" ]; then
+    curl -sS --insecure --max-time 15 -H "Host: $HOST" -H "$2" "$SCHEME://$DNS:$PORT$1" | tr -d '\r\n'
+  else
+    curl -sS --insecure --max-time 15 -H "Host: $HOST" "$SCHEME://$DNS:$PORT$1" | tr -d '\r\n'
+  fi
+}
+
+# Wait until the rules are actually serving rather than sleeping a guessed
+# interval, and wait for all three: they are created by separate calls and
+# propagate independently, so a gate on one still races the other two. A fixed
+# sleep produced a run where the first eight checks hit the listener default and
+# the last two, issued later, matched -- which reads as a conformance result and
+# is really a propagation race.
+printf 'waiting for all three rules to take effect'
+ready=""
+for _ in $(seq 1 30); do
+  if [ "$(fetch "/")" = "$BODY_ACTIVE" ] &&
+     [ "$(fetch "/?dpl=v1")" = "$BODY_QUERY" ] &&
+     [ "$(fetch "/" "x-deployment-id: v1")" = "$BODY_HEADER" ]; then
+    ready=1
+    break
+  fi
+  printf '.'
+  sleep 2
+done
+echo
+[ -n "$ready" ] || { echo "rules never began serving; aborting rather than recording a race" >&2; exit 1; }
+
+# The bodies carry the run token, so they are compared but reported by the short
+# name they stand for -- the table is the result, and a hex suffix in every cell
+# only obscures it.
+label () {
+  case "$1" in
+    "$BODY_ACTIVE") echo active ;;
+    "$BODY_QUERY") echo v1 ;;
+    "$BODY_HEADER") echo v1-header ;;
+    "") echo '<empty>' ;;
+    *) echo "$1" ;;
+  esac
 }
 
 fail=0
 check () {
-  local query=$1 want=$2 why=$3 got
-  got=$(fetch "$query" || echo '<request failed>')
+  local query=$1 want=$2 why=$3 header=${4:-} got
+  got=$(fetch "$query" "$header" || echo '<request failed>')
   if [ "$got" = "$want" ]; then
-    printf 'ok      %-26s -> %-6s %s\n' "$query" "$got" "$why"
+    printf 'ok      %-26s %-22s -> %-10s %s\n' "$query" "${header:-}" "$(label "$got")" "$why"
   else
-    printf 'FAIL    %-26s -> %-6s (wanted %s: %s)\n' "$query" "${got:-<empty>}" "$want" "$why"
+    printf 'FAIL    %-26s %-22s -> %-10s (wanted %s: %s)\n' "$query" "${header:-}" "$(label "$got")" "$(label "$want")" "$why"
     fail=1
   fi
 }
 record () {
-  printf 'record  %-26s -> %s\n' "$1" "$(fetch "$1" || echo '<request failed>')"
+  printf 'record  %-26s %-22s -> %s\n' "$1" "${2:-}" "$(label "$(fetch "$1" "${2:-}" || echo '<request failed>')")"
 }
 
 echo "-- asserted: the semantics ICC relies on"
-check "/"                     active "no pin: the active version serves"
-check "/?dpl=v1"              v1     "the premise: a pin reaches its own version"
-check "/?dpl=v2"              active "a pin with no rule of its own falls through"
-check "/?dpl=v1&utm_source=x" v1     "a pin among other parameters still matches"
-check "/?utm_source=x&dpl=v1" v1     "...in any position"
-check "/?dpl=v1x"             active "the value is matched whole, not as a prefix"
-check "/?dpl="                active "an empty value is not a pin"
+check "/"                     "$BODY_ACTIVE" "no pin: the active version serves"
+check "/?dpl=v1"              "$BODY_QUERY"  "the premise: a pin reaches its own version"
+check "/?dpl=v2"              "$BODY_ACTIVE" "a pin with no rule of its own falls through"
+check "/?dpl=v1&utm_source=x" "$BODY_QUERY"  "a pin among other parameters still matches"
+check "/?utm_source=x&dpl=v1" "$BODY_QUERY"  "...in any position"
+check "/?dpl=v1x"             "$BODY_ACTIVE" "the value is matched whole, not as a prefix"
+check "/?dpl="                "$BODY_ACTIVE" "an empty value is not a pin"
 # The reference says the comparison is case insensitive, which the emulator
 # agrees with. If this line fails, F6 in ecs-skew-protection-plan.md is wrong and
 # the version-label guidance changes.
-check "/?dpl=V1"              v1     "the value is matched case insensitively"
+check "/?dpl=V1"              "$BODY_QUERY"  "the value is matched case insensitively"
+# ICC emits a preview-header rule alongside the query pin. It was created by
+# every run of this probe and asserted by none of them.
+check "/"                     "$BODY_HEADER" "the preview header pins too" "x-deployment-id: v1"
+check "/"                     "$BODY_ACTIVE" "a preview header for another version does not" "x-deployment-id: v2"
 
 echo
 echo "-- recorded: the questions the emulator cannot answer (E9)"
