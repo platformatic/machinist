@@ -15,6 +15,18 @@ const MANAGED_BY_VALUE = 'icc'
 const APPLICATION_TAG = 'plt.dev/application'
 const VERSION_TAG = 'plt.dev/version'
 
+// When the plan that produced this rule was emitted by ICC. Rules are the only
+// place to keep it: the provider holds no state between calls, and the listener
+// is the shared thing two racing reconcilers both write. Reading it back is what
+// lets a resync refuse to move the listener backwards.
+const EMITTED_AT_TAG = 'plt.dev/plan-emitted-at'
+
+// The ordering that actually counts. ICC derives it from the same read as the
+// versions, so it describes the state the plan was built from rather than the
+// moment it was sent -- which is what a wall clock cannot express, and why a plan
+// built from stale state could previously win by being emitted late.
+const GENERATION_TAG = 'plt.dev/plan-generation'
+
 // ALB priorities are 1..50000 and must be unique per listener, which is shared
 // by every application behind the load balancer. Rules for one application take
 // a contiguous run so they keep the plan's order; the run is allocated from
@@ -26,7 +38,72 @@ function tagsFor (plan, versionId) {
     { Key: APPLICATION_TAG, Value: plan.appName }
   ]
   if (versionId) tags.push({ Key: VERSION_TAG, Value: versionId })
+  // Absent on a plan from an ICC that predates stamping, and on bootstrap rules,
+  // which are created by the workload path rather than from a plan.
+  if (Number.isFinite(plan.generation)) {
+    tags.push({ Key: GENERATION_TAG, Value: String(plan.generation) })
+  }
+  if (Number.isFinite(plan.emittedAt)) {
+    tags.push({ Key: EMITTED_AT_TAG, Value: String(plan.emittedAt) })
+  }
   return tags
+}
+
+// The newest plan already on the listener, as a number, or null when nothing
+// there carries a stamp. Unstamped rules read as "unknown" rather than as zero:
+// an unstamped listener must not block the first stamped plan from applying.
+function latestTag (rules, key) {
+  let latest = null
+  for (const rule of rules) {
+    const tag = (rule.Tags ?? []).find(t => t.Key === key)
+    if (!tag) continue
+    const value = Number(tag.Value)
+    if (!Number.isFinite(value)) continue
+    if (latest === null || value > latest) latest = value
+  }
+  return latest
+}
+
+const latestEmittedAt = (rules) => latestTag(rules, EMITTED_AT_TAG)
+const latestGeneration = (rules) => latestTag(rules, GENERATION_TAG)
+
+// Is this plan at least as new as what the listener already has?
+//
+// Generations are the desired-state ordering. The emitting ICC's wall clock is
+// consulted only during the upgrade case where neither side has a generation.
+// It narrows that legacy window but cannot prove order: a plan built from an
+// older snapshot can be emitted later, and replica clocks can disagree.
+//
+// Equality passes to permit replay of the same artifact. With generations that
+// means the same desired-state snapshot. With the legacy clock it is not proof
+// of sameness, because two emissions can land in the same millisecond.
+//
+// An UNSTAMPED plan against a stamped listener is refused too, which is the
+// conservative direction and was not the first choice here. Accepting it left the
+// hole open from the other side: during a rollout an ICC replica that predates
+// stamping, or any caller that builds a plan without one, could overwrite newer
+// routing precisely when two versions of ICC are running. Refusing costs that
+// replica its apply -- the version stays pending-apply and a stamped replica's
+// checker converges it -- which is recoverable, where an overwrite is not.
+//
+// An unstamped listener still accepts anything: nothing has claimed an ordering
+// there, so there is nothing to go backwards from.
+function isPlanCurrent (plan, rules) {
+  // Generation first, and on its own when either side has one: it is a real
+  // ordering of desired state, so a clock must never be allowed to overrule it.
+  const appliedGeneration = latestGeneration(rules)
+  if (appliedGeneration !== null || Number.isFinite(plan.generation)) {
+    if (appliedGeneration === null) return true
+    if (!Number.isFinite(plan.generation)) return false
+    return plan.generation >= appliedGeneration
+  }
+
+  // Neither side has one: an ICC that predates the generation talking to rules it
+  // wrote before it existed. Fall back to the clock, with its known limits.
+  const applied = latestEmittedAt(rules)
+  if (applied === null) return true
+  if (!Number.isFinite(plan.emittedAt)) return false
+  return plan.emittedAt >= applied
 }
 
 // A plan match becomes ALB rule conditions. The host header is always included:
@@ -131,8 +208,13 @@ module.exports = {
   isManagedRule,
   conditionsFor,
   tagsFor,
+  latestEmittedAt,
+  latestGeneration,
+  isPlanCurrent,
   MANAGED_BY_TAG,
   MANAGED_BY_VALUE,
   APPLICATION_TAG,
-  VERSION_TAG
+  VERSION_TAG,
+  EMITTED_AT_TAG,
+  GENERATION_TAG
 }

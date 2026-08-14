@@ -41,6 +41,7 @@ module.exports.ListenerNotConfigured = createError('MCHNST_LISTENER_NOT_CONFIGUR
 // working route with one that answers 503, so the apply is refused before any
 // rule is touched and the existing rules are left in place.
 module.exports.ActiveTargetGroupUnhealthy = createError('MCHNST_ACTIVE_TARGET_GROUP_UNHEALTHY', 'Refusing to apply the route plan for "%s": the active version "%s" has no healthy target', 409)
+module.exports.StaleRoutePlan = createError('MCHNST_STALE_ROUTE_PLAN', 'Refusing to apply the route plan for "%s": the listener already carries a newer one (plan %s, applied %s)', 409)
 
 const providerError = providerName => ({ statusCode, response }) => {
   const err = createError(

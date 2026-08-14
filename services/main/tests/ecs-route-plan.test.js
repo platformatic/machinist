@@ -7,8 +7,8 @@ const elbSdk = require('@aws-sdk/client-elastic-load-balancing-v2')
 const { Ecs } = require('../plugins/providers/ecs')
 
 // applyRoutePlan is a full resync: delete every rule ICC owns for the app, then
-// create the desired set. These tests pin the properties that shape was chosen
-// for -- idempotence, order independence, and not touching anyone else's rules.
+// create the desired set. These tests pin idempotence, generation ordering,
+// serialized same-app applies, and not touching anyone else's rules.
 
 const LISTENER_ARN = 'arn:aws:elasticloadbalancing:::listener/app/plt-shared/lb1/l1'
 
@@ -136,6 +136,53 @@ test('applies the plan by creating one rule per plan rule', async () => {
 
   assert.strictEqual(result.created, 3)
   assert.strictEqual(result.deleted, 0)
+})
+
+test('serializes concurrent route resyncs for the same application', async () => {
+  const ecs = buildEcs()
+  let describeServicesCalls = 0
+  let signalStarted
+  let releaseFirst
+  const firstStarted = new Promise(resolve => { signalStarted = resolve })
+  const firstMayContinue = new Promise(resolve => { releaseFirst = resolve })
+
+  ecs.ecsClient.send = async function (command) {
+    assert.strictEqual(command.constructor.name, 'DescribeServicesCommand')
+    describeServicesCalls++
+    if (describeServicesCalls === 1) {
+      signalStarted()
+      await firstMayContinue
+    }
+    return {
+      services: command.input.services.map(serviceName => ({
+        serviceName,
+        loadBalancers: [{ targetGroupArn: SERVICES[serviceName] }]
+      }))
+    }
+  }
+  ecs.elbClient.send = async function (command) {
+    switch (command.constructor.name) {
+      case 'DescribeTargetHealthCommand':
+        return { TargetHealthDescriptions: [{ TargetHealth: { State: 'healthy' } }] }
+      case 'DescribeRulesCommand':
+        return { Rules: [] }
+      case 'CreateRuleCommand':
+        return { Rules: [{ RuleArn: `arn:rule/${command.input.Priority}` }] }
+      default:
+        throw new Error(`unexpected ELB command: ${command.constructor.name}`)
+    }
+  }
+
+  const first = ecs.applyRoutePlan('my-cluster', { ...plan, generation: 1 })
+  await firstStarted
+  const second = ecs.applyRoutePlan('my-cluster', { ...plan, generation: 2 })
+
+  assert.strictEqual(describeServicesCalls, 1,
+    'the second resync must not start while the first one is applying')
+
+  releaseFirst()
+  await Promise.all([first, second])
+  assert.strictEqual(describeServicesCalls, 4)
 })
 
 test('deletes the app rules it already owns before creating', async () => {
@@ -468,4 +515,168 @@ test('a competing reconcile that keeps taking blocks is chased, then completed',
     ecsSdk.ECSClient.prototype.send = originalEcs
     elbSdk.ElasticLoadBalancingV2Client.prototype.send = originalElb
   }
+})
+
+function stampedRule (arn, emittedAt, app = 'myapp') {
+  const rule = managedRule(arn, app)
+  rule.Tags.push({ Key: 'plt.dev/plan-emitted-at', Value: String(emittedAt) })
+  return rule
+}
+
+test('a stale plan fails rather than reinstating a superseded version', async () => {
+  // The race this closes: plans churn on a timer and are also emitted from
+  // request paths on any ICC replica, so an older one can arrive after a newer
+  // one. Without an ordering token the resync deletes the current rules and
+  // installs the stale set, putting a drained version back in front of traffic.
+  //
+  // It must FAIL, not skip: ICC treats only a thrown error as a failed apply, so
+  // a success would let it confirm a version whose route was never installed.
+  await withAws({
+    services: SERVICES,
+    existingRules: [stampedRule('arn:rule/current', 2000)]
+  }, async calls => {
+    await assert.rejects(
+      () => buildEcs().applyRoutePlan('my-cluster', { ...plan, emittedAt: 1000 }),
+      err => err.code === 'MCHNST_STALE_ROUTE_PLAN' && err.statusCode === 409
+    )
+    assert.deepStrictEqual(calls.filter(c => c.name === 'DeleteRuleCommand'), [])
+    assert.deepStrictEqual(calls.filter(c => c.name === 'CreateRuleCommand'), [])
+  })
+})
+
+test('a newer plan applies over an older one', async () => {
+  await withAws({
+    services: SERVICES,
+    existingRules: [stampedRule('arn:rule/old', 1000)]
+  }, async calls => {
+    await buildEcs().applyRoutePlan('my-cluster', { ...plan, emittedAt: 2000 })
+
+    assert.deepStrictEqual(
+      calls.filter(c => c.name === 'DeleteRuleCommand').map(c => c.input.RuleArn),
+      ['arn:rule/old']
+    )
+  })
+})
+
+test('re-applying the same plan is not treated as stale', async () => {
+  // Equal must pass, so the same artifact can be replayed -- a retry, or a caller
+  // that applies then re-applies. Equality is not proof of sameness: two distinct
+  // emissions can collide within one millisecond, which the wall clock cannot
+  // distinguish either way.
+  await withAws({
+    services: SERVICES,
+    existingRules: [stampedRule('arn:rule/current', 1500)]
+  }, async calls => {
+    await buildEcs().applyRoutePlan('my-cluster', { ...plan, emittedAt: 1500 })
+    assert.ok(calls.some(c => c.name === 'CreateRuleCommand'))
+  })
+})
+
+test('an unstamped listener accepts a stamped plan', async () => {
+  // Upgrade path: rules created before stamping carry no token, and must not
+  // block the first stamped plan from applying.
+  await withAws({
+    services: SERVICES,
+    existingRules: [managedRule('arn:rule/legacy')]
+  }, async calls => {
+    await buildEcs().applyRoutePlan('my-cluster', { ...plan, emittedAt: 1000 })
+    assert.ok(calls.some(c => c.name === 'CreateRuleCommand'))
+  })
+})
+
+test('an unstamped plan is refused against a stamped listener', async () => {
+  // Fail closed. An ICC replica that predates stamping, or any caller that builds
+  // a plan without one, must not overwrite newer routing -- which is exactly the
+  // window a rollout opens. The refused replica leaves the version in
+  // pending-apply and a stamped replica's checker converges it.
+  await withAws({
+    services: SERVICES,
+    existingRules: [stampedRule('arn:rule/current', 2000)]
+  }, async calls => {
+    await assert.rejects(
+      () => buildEcs().applyRoutePlan('my-cluster', plan),
+      err => err.code === 'MCHNST_STALE_ROUTE_PLAN'
+    )
+    assert.deepStrictEqual(calls.filter(c => c.name === 'CreateRuleCommand'), [])
+  })
+})
+
+test('applied rules carry the plan stamp so the next resync can order itself', async () => {
+  await withAws({ services: SERVICES }, async calls => {
+    await buildEcs().applyRoutePlan('my-cluster', { ...plan, emittedAt: 4242 })
+
+    const created = calls.filter(c => c.name === 'CreateRuleCommand')
+    assert.ok(created.length > 0)
+    for (const call of created) {
+      const stamp = call.input.Tags.find(t => t.Key === 'plt.dev/plan-emitted-at')
+      assert.strictEqual(stamp?.Value, '4242')
+    }
+  })
+})
+
+function generationRule (arn, generation, app = 'myapp') {
+  const rule = managedRule(arn, app)
+  rule.Tags.push({ Key: 'plt.dev/plan-generation', Value: String(generation) })
+  return rule
+}
+
+test('an older generation is refused even when its clock is newer', async () => {
+  // The flaw the generation replaces: emittedAt is taken when the plan is sent,
+  // so a plan built from an older snapshot but emitted later carried the higher
+  // number and won. The generation comes from the same read as the versions, so
+  // it cannot be beaten by being slow.
+  await withAws({
+    services: SERVICES,
+    existingRules: [generationRule('arn:rule/current', 9)]
+  }, async calls => {
+    await assert.rejects(
+      () => buildEcs().applyRoutePlan('my-cluster', { ...plan, generation: 5, emittedAt: Date.now() + 60000 }),
+      err => err.code === 'MCHNST_STALE_ROUTE_PLAN'
+    )
+    assert.deepStrictEqual(calls.filter(c => c.name === 'DeleteRuleCommand'), [])
+  })
+})
+
+test('a newer generation applies and stamps its rules', async () => {
+  await withAws({
+    services: SERVICES,
+    existingRules: [generationRule('arn:rule/old', 5)]
+  }, async calls => {
+    await buildEcs().applyRoutePlan('my-cluster', { ...plan, generation: 9 })
+
+    const created = calls.filter(c => c.name === 'CreateRuleCommand')
+    assert.ok(created.length > 0)
+    for (const call of created) {
+      const tag = call.input.Tags.find(t => t.Key === 'plt.dev/plan-generation')
+      assert.strictEqual(tag?.Value, '9')
+    }
+  })
+})
+
+test('a generation-less plan is refused against generation-stamped rules', async () => {
+  // Fail closed in the same direction as the clock stamp: an ICC that cannot
+  // produce a generation must not overwrite rules written by one that can.
+  await withAws({
+    services: SERVICES,
+    existingRules: [generationRule('arn:rule/current', 9)]
+  }, async calls => {
+    await assert.rejects(
+      () => buildEcs().applyRoutePlan('my-cluster', { ...plan, emittedAt: Date.now() }),
+      err => err.code === 'MCHNST_STALE_ROUTE_PLAN'
+    )
+  })
+})
+
+test('the clock is still used when neither side has a generation', async () => {
+  // The upgrade window: rules written before generations existed, and a plan
+  // from an ICC that predates them.
+  await withAws({
+    services: SERVICES,
+    existingRules: [stampedRule('arn:rule/current', 2000)]
+  }, async calls => {
+    await assert.rejects(
+      () => buildEcs().applyRoutePlan('my-cluster', { ...plan, emittedAt: 1000 }),
+      err => err.code === 'MCHNST_STALE_ROUTE_PLAN'
+    )
+  })
 })

@@ -191,6 +191,7 @@ class Ecs {
   #cloudMapNamespace = null
   #cloudMapServiceNames = new Map()
   #portsByTaskDefinition = new Map()
+  #routeApplyTails = new Map()
   #retryBaseMs
   #cleanupRetryBaseMs
   #warnedNoListener = false
@@ -1142,13 +1143,39 @@ class Ecs {
   // application on the listener, then create exactly the desired set.
   //
   // A resync rather than a diff because the rules churn on a timer -- a version
-  // expiring re-emits a plan with no deploy and no operator involved -- so a
-  // stale plan applied late must still converge. Deleting first also keeps the
-  // sequence order-independent and idempotent, the properties `kubectl apply`
-  // has for free. The cost is a short window with no pinning rules, during which
+  // expiring re-emits a plan with no deploy and no operator involved -- so an
+  // interleaved apply must still converge. Deleting first makes the sequence
+  // idempotent, one of the two properties `kubectl apply` has for free.
+  //
+  // It does NOT make it order-independent: a resync converges on whatever plan it
+  // carries, so an older plan arriving late would reinstate a drained version.
+  // That is what the ordering check below refuses -- by generation where either
+  // side has one, by emittedAt only as a fallback; see plan D6. The cost is a short window with no pinning rules, during which
   // pinned requests fall through to the active version; that is strictly better
   // than the 503 a half-applied diff produces. See plan D6.
   async applyRoutePlan (namespace, plan) {
+    const key = `${this.#listenerArn}\u0000${plan.appName}`
+    const previous = this.#routeApplyTails.get(key) ?? Promise.resolve()
+    let release
+    const gate = new Promise(resolve => { release = resolve })
+    const tail = previous.then(() => gate)
+    this.#routeApplyTails.set(key, tail)
+
+    await previous
+    try {
+      return await this.#applyRoutePlan(namespace, plan)
+    } finally {
+      release()
+      if (this.#routeApplyTails.get(key) === tail) this.#routeApplyTails.delete(key)
+    }
+  }
+
+  // A full resync is a read/check/delete/create sequence, not an atomic AWS
+  // operation. Serialize it per listener/application within this task so two
+  // requests cannot both pass the generation check against the same rule set.
+  // Separate Machinist tasks are not serialized by a shared lock; their applies
+  // are ordered by the generation stamped on the listener rules instead.
+  async #applyRoutePlan (namespace, plan) {
     if (!this.#listenerArn) {
       throw new errors.ListenerNotConfigured()
     }
@@ -1202,6 +1229,42 @@ class Ecs {
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const { mine, others } = await this.#partitionRules(plan.appName)
+
+      // Refuse to move the listener backwards. Plans churn on a timer and are
+      // also emitted from request paths on any ICC replica, so two can be in
+      // flight at once; a resync carrying an older plan would otherwise delete
+      // the current rules and reinstate a superseded active version.
+      //
+      // This must FAIL, not skip. ICC treats only a thrown error as a failed
+      // apply, so a success would let it confirm a version whose route was never
+      // installed, or tear down a backend the listener is still serving -- the
+      // control plane and the ALB would then disagree with nothing to reconcile
+      // them. Failing leaves the version in pending-apply, and the checker
+      // retries with a freshly built plan.
+      //
+      if (!albRules.isPlanCurrent(plan, mine)) {
+        // Report whichever ordering actually decided it. The generation is the
+        // real one; the clock is only consulted when neither side has a
+        // generation, so leading with a timestamp would point a reader at a value
+        // that had no bearing on the rejection.
+        const appliedGeneration = albRules.latestGeneration(mine)
+        const byGeneration = appliedGeneration !== null || Number.isFinite(plan.generation)
+        const incoming = byGeneration ? plan.generation : plan.emittedAt
+        const applied = byGeneration ? appliedGeneration : albRules.latestEmittedAt(mine)
+
+        this.log.warn({
+          appName: plan.appName,
+          orderedBy: byGeneration ? 'generation' : 'emittedAt',
+          incoming: incoming ?? null,
+          applied
+        }, 'refusing a stale route plan; the listener already carries a newer one')
+        throw new errors.StaleRoutePlan(
+          plan.appName,
+          `${byGeneration ? 'generation' : 'emittedAt'} ${incoming ?? 'absent'}`,
+          String(applied)
+        )
+      }
+
       // A workload creates its bootstrap rule before it can register with ICC,
       // so a concurrent reconcile still carries the old plan. Preserve
       // bootstrap rules for versions absent from that plan; deleting one in
