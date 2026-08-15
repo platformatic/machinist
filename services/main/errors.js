@@ -28,6 +28,21 @@ module.exports.VolumeRemoved = createError('MCHNST_VOLUME_REMOVED', 'Requested v
 module.exports.ZioUpdateConfig = createError('MCHNST_ZIO_UPDATE_CONFIG', 'Changing Zio config failed: %s', 500)
 module.exports.ZioUpdateKey = createError('MCHNST_ZIO_UPDATE_API_KEY', 'Setting API key on ZIO failed: %s', 500)
 
+// A version's target group is discovered from its ECS service rather than
+// created, because attaching one restarts the service's tasks -- see
+// ecs-skew-protection-plan.md F2. A version without one is a
+// configuration error the operator has to fix.
+module.exports.TargetGroupNotFound = createError('MCHNST_TARGET_GROUP_NOT_FOUND', 'No target group for ECS service "%s": %s', 400)
+
+module.exports.ListenerNotConfigured = createError('MCHNST_LISTENER_NOT_CONFIGURED', 'No ALB listener is configured (PLT_ECS_LISTENER_ARN); cannot apply a route plan', 400)
+
+// Applying a route plan is a resync: the live rules are deleted and recreated.
+// If the incoming active version cannot serve, completing that would replace a
+// working route with one that answers 503, so the apply is refused before any
+// rule is touched and the existing rules are left in place.
+module.exports.ActiveTargetGroupUnhealthy = createError('MCHNST_ACTIVE_TARGET_GROUP_UNHEALTHY', 'Refusing to apply the route plan for "%s": the active version "%s" has no healthy target', 409)
+module.exports.StaleRoutePlan = createError('MCHNST_STALE_ROUTE_PLAN', 'Refusing to apply the route plan for "%s": the listener already carries a newer one (plan %s, applied %s)', 409)
+
 const providerError = providerName => ({ statusCode, response }) => {
   const err = createError(
     `MCHNST_${providerName.toUpperCase()}_ERROR`,

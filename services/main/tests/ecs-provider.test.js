@@ -2,8 +2,19 @@
 
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
-const ecsSdk = require('@aws-sdk/client-ecs')
+const { mockClient } = require('aws-sdk-client-mock')
+const { ECSClient, DescribeTasksCommand } = require('@aws-sdk/client-ecs')
 const { Ecs } = require('../plugins/providers/ecs')
+
+// Replace an Ecs instance's ECS client with a mock and return the recorded
+// calls, so tests can assert which command was sent and with what input.
+// The provider exposes ecsClient publicly for exactly this reason.
+function mockEcsClient (ecs, command, response) {
+  const mock = mockClient(ECSClient)
+  mock.on(command).resolves(response)
+  ecs.ecsClient = mock
+  return mock
+}
 
 function mockTask (overrides = {}) {
   return {
@@ -116,21 +127,12 @@ test('Ecs#formatMachine extracts correct fields from ECS task', async () => {
   assert.strictEqual(task.tags[0].key, 'app.kubernetes.io/name')
 })
 
-// Drive the real Ecs#formatMachine via getMachine with the ECS client's send()
-// stubbed, so we exercise the actual field mapping (the mock provider above
-// bypasses it).
+// Drive the real Ecs#formatMachine via getMachine against a mocked ECS client,
+// so we exercise the actual field mapping (the mock provider above bypasses it).
 async function getMachineWithTask (task) {
-  const originalSend = ecsSdk.ECSClient.prototype.send
-  ecsSdk.ECSClient.prototype.send = async () => ({ tasks: [task], failures: [] })
-  try {
-    const ecs = new Ecs({
-      config: { PLT_ECS_REGION: 'us-east-1', PLT_ECS_CLUSTER: 'my-cluster' },
-      log: { debug () {} }
-    })
-    return await ecs.getMachine('my-cluster', task.taskArn)
-  } finally {
-    ecsSdk.ECSClient.prototype.send = originalSend
-  }
+  const ecs = buildEcs()
+  mockEcsClient(ecs, DescribeTasksCommand, { tasks: [task], failures: [] })
+  return ecs.getMachine('my-cluster', task.taskArn)
 }
 
 test('Ecs#formatMachine surfaces the container imageDigest', async () => {
@@ -145,6 +147,42 @@ test('Ecs#formatMachine omits imageDigest when the task container has none', asy
   const machine = await getMachineWithTask(mockTask()) // default container carries no imageDigest
   assert.strictEqual(machine.image, 'myapp:latest')
   assert.strictEqual(machine.imageDigest, undefined)
+})
+
+test('Ecs#getMachine sends DescribeTasks scoped to the namespace and asks for tags', async () => {
+  const ecs = buildEcs()
+  const mock = mockEcsClient(ecs, DescribeTasksCommand, { tasks: [mockTask()], failures: [] })
+
+  await ecs.getMachine('my-cluster', 'abc123')
+
+  const calls = mock.commandCalls(DescribeTasksCommand)
+  assert.strictEqual(calls.length, 1)
+  assert.deepStrictEqual(calls[0].args[0].input, {
+    cluster: 'my-cluster',
+    tasks: ['abc123'],
+    include: ['TAGS']
+  })
+})
+
+test('Ecs honours PLT_ECS_ENDPOINT so tests can target an emulator', async () => {
+  const ecs = new Ecs({
+    config: {
+      PLT_ECS_REGION: 'us-east-1',
+      PLT_ECS_CLUSTER: 'my-cluster',
+      PLT_ECS_ENDPOINT: 'http://localhost:5111'
+    },
+    log: { debug () {} }
+  })
+
+  const endpoint = await ecs.ecsClient.config.endpoint()
+  assert.strictEqual(endpoint.hostname, 'localhost')
+  assert.strictEqual(endpoint.port, 5111)
+})
+
+test('Ecs leaves the endpoint at the AWS default when PLT_ECS_ENDPOINT is unset', async () => {
+  const ecs = buildEcs()
+  // No override, so the SDK resolves the regional endpoint itself at call time.
+  assert.strictEqual(ecs.ecsClient.config.endpoint, undefined)
 })
 
 test('task.group parsing extracts service name', async () => {
@@ -387,9 +425,11 @@ const NOT_SUPPORTED = err =>
   err.statusCode === 501 &&
   /ecs/.test(err.message)
 
-test('Ecs#listGateways throws 501 not-implemented', async () => {
+// listGateways is implemented now: it reports the configured ALB listener, or
+// nothing when none is configured. See tests/ecs-gateways.test.js.
+test('Ecs#listGateways reports no gateways when no listener is configured', async () => {
   const ecs = buildEcs()
-  await assert.rejects(() => ecs.listGateways('my-cluster'), NOT_SUPPORTED)
+  assert.deepStrictEqual(await ecs.listGateways('my-cluster'), [])
 })
 
 test('Ecs#applyHTTPRoute throws 501 not-implemented', async () => {
@@ -397,9 +437,11 @@ test('Ecs#applyHTTPRoute throws 501 not-implemented', async () => {
   await assert.rejects(() => ecs.applyHTTPRoute('my-cluster', {}), NOT_SUPPORTED)
 })
 
-test('Ecs#deleteHTTPRoute throws 501 not-implemented', async () => {
+// deleteHTTPRoute is implemented now: it removes the listener rules ICC owns for
+// the application. With no listener configured there is nothing to remove.
+test('Ecs#deleteHTTPRoute is a no-op when no listener is configured', async () => {
   const ecs = buildEcs()
-  await assert.rejects(() => ecs.deleteHTTPRoute('my-cluster', 'foo'), NOT_SUPPORTED)
+  assert.deepStrictEqual(await ecs.deleteHTTPRoute('my-cluster', 'foo'), {})
 })
 
 test('skew protection error message names the operation', async () => {
@@ -429,17 +471,17 @@ async function buildAppWithSkewRoutes (provider) {
   return app
 }
 
-test('GET /ecs/gateway/gateways/:namespace returns 501 from ECS provider', async (t) => {
+// The gateways endpoint is implemented for ECS now. With no listener configured
+// it reports an empty list, which is how the caller learns routing is off.
+test('GET /ecs/gateway/gateways/:namespace returns the configured listeners', async (t) => {
   const ecs = buildEcs()
   const app = await buildAppWithSkewRoutes(ecs)
   t.after(() => app.close())
 
   const res = await app.inject({ method: 'GET', url: '/ecs/gateway/gateways/my-cluster' })
 
-  assert.strictEqual(res.statusCode, 501)
-  const body = res.json()
-  assert.strictEqual(body.code, 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER')
-  assert.match(body.message, /ecs/)
+  assert.strictEqual(res.statusCode, 200)
+  assert.deepStrictEqual(res.json(), [])
 })
 
 test('PUT /ecs/gateway/httproutes/:namespace returns 501 from ECS provider', async (t) => {
@@ -458,7 +500,7 @@ test('PUT /ecs/gateway/httproutes/:namespace returns 501 from ECS provider', asy
   assert.strictEqual(res.json().code, 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER')
 })
 
-test('DELETE /ecs/gateway/httproutes/:namespace/:name returns 501 from ECS provider', async (t) => {
+test('DELETE /ecs/gateway/httproutes/:namespace/:name removes ICC-managed rules', async (t) => {
   const ecs = buildEcs()
   const app = await buildAppWithSkewRoutes(ecs)
   t.after(() => app.close())
@@ -468,6 +510,6 @@ test('DELETE /ecs/gateway/httproutes/:namespace/:name returns 501 from ECS provi
     url: '/ecs/gateway/httproutes/my-cluster/foo'
   })
 
-  assert.strictEqual(res.statusCode, 501)
-  assert.strictEqual(res.json().code, 'MCHNST_NOT_IMPLEMENTED_BY_PROVIDER')
+  assert.strictEqual(res.statusCode, 200)
+  assert.deepStrictEqual(res.json(), {})
 })

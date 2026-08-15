@@ -3,7 +3,10 @@
   "license": "Apache-2.0",
   "scripts": {
     "test": "pnpm -r --workspace-concurrency=1 test",
+    "test:setup": "pnpm --filter machinist test:setup",
     "test:unit": "pnpm -r --workspace-concurrency=1 test:unit",
+    "test:e2e:ecs": "pnpm --filter machinist test:e2e:ecs",
+    "test:teardown": "pnpm --filter machinist test:teardown",
     "lint": "pnpm -r lint",
     "lint:fix": "pnpm -r lint:fix",
     "cleanall": "rm pnpm-lock.yaml && rm -rf node_modules && rm -rf services/*/node_modules",
