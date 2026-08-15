@@ -1,7 +1,8 @@
 'use strict'
 
-// TODO(ecs): Skew protection — design provider-agnostic traffic routing
-// abstraction when adding skew protection for non-K8s providers.
+// Provider-specific gateway discovery behind one endpoint. Kubernetes returns
+// Gateway API resources; ECS exposes its configured ALB listener as equivalent
+// gateway metadata for the neutral RoutePlan path.
 
 module.exports = async function routes (fastify) {
   fastify.get('/gateway/gateways/:namespace', {

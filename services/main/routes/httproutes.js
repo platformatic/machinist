@@ -1,7 +1,7 @@
 'use strict'
 
-// TODO(ecs): Skew protection — design provider-agnostic traffic routing
-// abstraction when adding skew protection for non-K8s providers.
+// Kubernetes keeps its declarative HTTPRoute endpoint. Providers that render
+// the neutral routing model themselves use /gateway/routeplans instead.
 
 module.exports = async function routes (fastify) {
   fastify.put('/gateway/httproutes/:namespace', {

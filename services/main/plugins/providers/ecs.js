@@ -636,10 +636,11 @@ class Ecs {
       }
     }
 
-    // The health check mirrors the Kubernetes readiness probe rather than the
-    // container health check: this is what decides whether the ALB will send
-    // the version traffic. Checking the wrong port would mark every target
-    // unhealthy and applyRoutePlan would then refuse to route to it.
+    // The target-group check mirrors the Kubernetes readiness probe on the
+    // dedicated metrics port. This decides whether the ALB may send application
+    // traffic without making its own probes count as application RPS. A check on
+    // the traffic port either fails when the readiness path is absent or creates
+    // permanent ingress traffic when the application answers it.
     const metricsPort = spec.ports?.metrics ?? 9090
     const healthCheckPort = spec.healthCheck?.port === 'metrics' ? String(metricsPort) : 'traffic-port'
 
