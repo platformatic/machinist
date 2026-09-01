@@ -15,7 +15,7 @@ name: machinist-tests
 
 services:
   floci:
-    image: floci/floci:1.6.0
+    image: floci/floci:2.0.1
     ports:
       - '4566:4566'   # the AWS API
       - '8081:8081'   # the ALB listener the tests create
