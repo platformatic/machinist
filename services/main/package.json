@@ -51,5 +51,5 @@
     "standard": "^17.1.2",
     "yaml": "^2.8.1"
   },
-  "packageManager": "pnpm@11.5.0"
+  "packageManager": "pnpm@12.3.4"
 }
