@@ -15,7 +15,7 @@ name: machinist-tests
 
 services:
   floci:
-    image: floci/floci:1.6.0
+    image: floci/floci:1.7.0
     ports:
       - '4566:4566'   # the AWS API
       - '8081:8081'   # the ALB listener the tests create
@@ -24,14 +24,14 @@ services:
         ipv4_address: 172.30.0.10
 
   echo-v1:
-    image: busybox:1.37.0
+    image: busybox:1.38.0
     command: sh -c "mkdir -p /www && echo v1 > /www/index.html && httpd -f -p 8080 -h /www"
     networks:
       plt:
         ipv4_address: 172.30.0.11
 
   echo-v2:
-    image: busybox:1.37.0
+    image: busybox:1.38.0
     command: sh -c "mkdir -p /www && echo v2 > /www/index.html && httpd -f -p 8080 -h /www"
     networks:
       plt:
@@ -41,7 +41,7 @@ services:
   # emulator registers no real containers, so its target group is given this
   # address by hand.
   echo-v4:
-    image: busybox:1.37.0
+    image: busybox:1.38.0
     command: sh -c "mkdir -p /www && echo v4 > /www/index.html && httpd -f -p 8080 -h /www"
     networks:
       plt:
