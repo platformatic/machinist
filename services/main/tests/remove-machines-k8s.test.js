@@ -73,9 +73,13 @@ test('the pods named are the ones removed when a deployment is scaled down', asy
   const [survivor] = (await runningPods(2)).filter(pod => pod.metadata.annotations?.['machinist.platformatic.dev/remove-first'] === 'true')
   assert.ok([first, added].includes(survivor?.metadata.name))
 
-  // It loses the mark when another pod is named, which is then the one removed
+  // It loses the mark at the next change of the count, even one which names no pod
   await scale(app, { replicas: 3 })
-  await runningPods(3)
+  for (const pod of await runningPods(3)) {
+    assert.strictEqual(pod.metadata.annotations?.['machinist.platformatic.dev/remove-first'], undefined)
+    assert.strictEqual(pod.metadata.annotations?.['controller.kubernetes.io/pod-deletion-cost'], undefined)
+  }
+
   const marked = await scale(app, { replicas: 2, remove: [second] })
   assert.deepStrictEqual(marked.removal, { steered: true, machines: [second] })
   assert.ok(!names(await runningPods(2)).includes(second))
