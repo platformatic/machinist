@@ -9,6 +9,7 @@ const {
   DescribeServicesCommand,
   ListServicesCommand,
   UpdateServiceCommand,
+  UpdateTaskProtectionCommand,
   DeleteServiceCommand,
   TagResourceCommand,
   RegisterTaskDefinitionCommand,
@@ -52,6 +53,12 @@ const {
 const albRules = require('../../lib/alb-rules')
 const { createHash } = require('node:crypto')
 const errors = require('../../errors')
+
+// How long the tasks to keep are protected from a scale in, see #protectFromRemoval(): long enough for the service to
+// choose the tasks it stops, and short, since a protected task also holds back a deployment
+const REMOVAL_PROTECTION_MINUTES = 5
+// UpdateTaskProtection takes at most 10 tasks
+const PROTECTION_BATCH = 10
 
 const SCHEMA = {
   type: 'object',
@@ -349,19 +356,87 @@ class Ecs {
     }
   }
 
-  async updateControllerReplicas (namespace, name, replicaCount) {
+  // remove is optional: the machines to remove first when the count is lowered. The answer then has `removal`, which
+  // tells whether the others were protected: the count is changed in any case.
+  async updateControllerReplicas (namespace, name, replicaCount, _providerMetadata, remove) {
+    const removal = Array.isArray(remove) && remove.length > 0
+      ? await this.#protectFromRemoval(namespace, name, replicaCount, remove)
+      : null
+
     const { service } = await this.ecsClient.send(new UpdateServiceCommand({
       cluster: namespace,
       service: name,
       desiredCount: replicaCount
     }))
 
-    return {
+    const controller = {
       name: service.serviceName,
       replicas: service.desiredCount,
       labels: this.#tagsToLabels(service.tags),
       providerMetadata: {}
     }
+
+    if (removal) {
+      controller.removal = removal
+    }
+
+    return controller
+  }
+
+  // ECS cannot be told which tasks to stop, only which ones not to: the tasks to keep get the scale-in protection for
+  // a few minutes, see https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-scale-in-protection.html, so
+  // that the service stops the others when its count is lowered. No more tasks are protected than the new count: with
+  // fewer machines named than the count goes down by, the service chooses the rest among those left unprotected.
+  // Whatever fails here, i.e. a role without ecs:UpdateTaskProtection, the count is changed all the same, and the
+  // answer says that the removal was not steered.
+  async #protectFromRemoval (namespace, name, replicaCount, remove) {
+    const machines = []
+
+    try {
+      const taskArns = await this.#listAllTaskArns(namespace, name)
+
+      if (!(replicaCount < taskArns.length)) {
+        return { steered: false, machines, reason: 'not-a-scale-down' }
+      }
+
+      const wanted = new Set(remove.map(machineId => this.#shortTaskId(machineId)))
+      const keep = []
+
+      for (const taskArn of taskArns) {
+        const id = this.#shortTaskId(taskArn)
+
+        if (wanted.has(id)) {
+          machines.push(id)
+        } else {
+          keep.push(taskArn)
+        }
+      }
+
+      if (machines.length === 0) {
+        return { steered: false, machines, reason: 'machines-not-found' }
+      }
+
+      const protect = keep.slice(0, replicaCount)
+
+      for (let i = 0; i < protect.length; i += PROTECTION_BATCH) {
+        const { failures } = await this.ecsClient.send(new UpdateTaskProtectionCommand({
+          cluster: namespace,
+          tasks: protect.slice(i, i + PROTECTION_BATCH),
+          protectionEnabled: true,
+          expiresInMinutes: REMOVAL_PROTECTION_MINUTES
+        }))
+
+        if (failures?.length > 0) {
+          this.log.warn({ failures, namespace, controller: name }, 'Unable to protect some tasks from the scale in')
+          return { steered: false, machines, reason: 'protection-failed' }
+        }
+      }
+    } catch (err) {
+      this.log.warn({ err, namespace, controller: name }, 'Unable to choose the tasks to remove first')
+      return { steered: false, machines: [], reason: 'failed' }
+    }
+
+    return { steered: true, machines }
   }
 
   async deleteController (namespace, name) {

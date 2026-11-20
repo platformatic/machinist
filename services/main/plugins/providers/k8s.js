@@ -19,6 +19,15 @@ const SCHEMA = {
   }
 }
 
+// The ReplicaSet controller removes first the pods with the lowest deletion cost, among those which run: see
+// https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/#pod-deletion-cost. It is a preference, not a
+// guarantee, and only the controllers which scale through a ReplicaSet follow it.
+const DELETION_COST_ANNOTATION = 'controller.kubernetes.io/pod-deletion-cost'
+const LOWEST_DELETION_COST = '-2147483648'
+// Marks the pods whose deletion cost was set here, so that it is cleared from those which were not removed
+const REMOVE_FIRST_ANNOTATION = 'machinist.platformatic.dev/remove-first'
+const STEERABLE_KINDS = ['Deployment', 'ReplicaSet']
+
 class K8s {
   constructor ({ config, log, caContent, tokenPath, authType, clientCreds }) {
     this.log = log
@@ -133,9 +142,14 @@ class K8s {
     }
   }
 
-  async updateControllerReplicas (namespace, name, replicaCount, providerMetadata) {
+  // remove is optional: the machines to remove first when the count is lowered. The answer then has `removal`, which
+  // tells whether the preference was set: the count is changed in any case.
+  async updateControllerReplicas (namespace, name, replicaCount, providerMetadata, remove) {
     const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
     const raw = await this.#getRawController(namespace, name, apiVersion, kind)
+    const removal = Array.isArray(remove) && remove.length > 0
+      ? await this.#preferRemoval(namespace, raw, kind, replicaCount, remove)
+      : null
 
     raw.spec.replicas = replicaCount
 
@@ -146,12 +160,79 @@ class K8s {
       body: JSON.stringify(raw)
     })
 
-    return {
+    const controller = {
       name: updated.metadata?.name,
       replicas: updated.spec?.replicas,
       labels: updated.metadata?.labels ?? {},
       providerMetadata: { kind, apiVersion }
     }
+
+    if (removal) {
+      controller.removal = removal
+    }
+
+    return controller
+  }
+
+  // Gives the lowest deletion cost to the pods to remove first, before the count of their controller is lowered, and
+  // clears it from the pods marked by an earlier request which are still there, i.e. were not removed: they would
+  // otherwise be preferred at the next scale down. Whatever fails here, the count is changed all the same, and the
+  // answer says that the removal was not steered.
+  async #preferRemoval (namespace, raw, kind, replicaCount, remove) {
+    if (!(replicaCount < raw.spec?.replicas)) {
+      return { steered: false, machines: [], reason: 'not-a-scale-down' }
+    }
+
+    if (!STEERABLE_KINDS.includes(kind)) {
+      return { steered: false, machines: [], reason: 'unsupported-controller' }
+    }
+
+    const matchLabels = raw.spec?.selector?.matchLabels ?? {}
+
+    // Without labels the list would be every pod of the namespace
+    if (Object.keys(matchLabels).length === 0) {
+      return { steered: false, machines: [], reason: 'no-selector' }
+    }
+
+    const machines = []
+
+    try {
+      const labelSelector = Object.entries(matchLabels).map(([k, v]) => `${k}=${v}`).join(',')
+      const { items } = await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods?labelSelector=${labelSelector}`)
+
+      for (const pod of items ?? []) {
+        const podName = pod.metadata?.name
+        const marked = pod.metadata?.annotations?.[REMOVE_FIRST_ANNOTATION] === 'true'
+
+        if (remove.includes(podName)) {
+          // A pod which is terminating is on its way out already
+          if (pod.metadata?.deletionTimestamp) {
+            continue
+          }
+
+          if (!marked) {
+            await this.#annotatePod(namespace, podName, { [DELETION_COST_ANNOTATION]: LOWEST_DELETION_COST, [REMOVE_FIRST_ANNOTATION]: 'true' })
+          }
+
+          machines.push(podName)
+        } else if (marked) {
+          await this.#annotatePod(namespace, podName, { [DELETION_COST_ANNOTATION]: null, [REMOVE_FIRST_ANNOTATION]: null })
+        }
+      }
+    } catch (err) {
+      this.log.warn({ err, namespace, controller: raw.metadata?.name }, 'Unable to choose the pods to remove first')
+      return { steered: false, machines: [], reason: 'failed' }
+    }
+
+    return machines.length > 0 ? { steered: true, machines } : { steered: false, machines, reason: 'machines-not-found' }
+  }
+
+  async #annotatePod (namespace, podName, annotations) {
+    await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods/${podName}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/strategic-merge-patch+json' },
+      body: JSON.stringify({ metadata: { annotations } })
+    })
   }
 
   async deleteController (namespace, name, providerMetadata) {

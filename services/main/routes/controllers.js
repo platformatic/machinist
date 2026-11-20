@@ -20,6 +20,25 @@ const controllerSchema = {
   }
 }
 
+// What a provider did with the machines the caller asked to remove first, see the POST route below. Present only in
+// the answer to a request which named machines.
+const removalSchema = {
+  type: 'object',
+  properties: {
+    // Whether the provider was told to remove the machines first: a preference on Kubernetes, see the provider
+    steered: { type: 'boolean' },
+    // The machines of the controller found among those named
+    machines: { type: 'array', items: { type: 'string' } },
+    // Why the removal was not steered
+    reason: { type: 'string' }
+  }
+}
+
+const scaledControllerSchema = {
+  ...controllerSchema,
+  properties: { ...controllerSchema.properties, removal: removalSchema }
+}
+
 module.exports = async function routes (fastify) {
   fastify.get('/controllers/:namespace', {
     schema: {
@@ -104,19 +123,27 @@ module.exports = async function routes (fastify) {
       body: {
         type: 'object',
         properties: {
-          replicas: { type: 'number' }
+          replicas: { type: 'number' },
+          // Optional: the machines to remove first when the count is lowered, i.e. those the caller emptied. Without
+          // it the provider chooses, as it always did. A machinist which predates it ignores it, and its answer has
+          // no `removal`: that is how a caller tells that the removal was not steered.
+          remove: {
+            type: 'array',
+            items: { type: 'string' },
+            maxItems: 100
+          }
         },
         required: ['replicas']
       },
       response: {
-        200: controllerSchema
+        200: scaledControllerSchema
       }
     }
   }, async (request) => {
     const { namespace, name } = request.params
-    const { replicas } = request.body
+    const { replicas, remove } = request.body
     const providerMetadata = { ...request.query }
-    return fastify.provider.updateControllerReplicas(namespace, name, replicas, providerMetadata)
+    return fastify.provider.updateControllerReplicas(namespace, name, replicas, providerMetadata, remove)
   })
 
   fastify.put('/controllers/:namespace', {
