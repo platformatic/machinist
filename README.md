@@ -98,7 +98,7 @@ A network endpoint for reaching an application (K8s Service / ECS load balancer 
 | `setMachineLabels(scope, id, labels)` | Set metadata on a machine | `PATCH` pod with strategic-merge-patch | `TagResource` on task ARN |
 | `getControllers(scope, machineId?)` | List controllers, or find controller for a machine | Get pods, group by ownerRef controller | `ListServices` + `DescribeServices`, or parse `task.group` |
 | `getController(scope, name)` | Get a controller with its machines | Resolve kind/apiVersion internally, fetch deployment + pods by matchLabels | `DescribeServices` + `ListTasks` + `DescribeTasks` |
-| `updateControllerReplicas(scope, name, n)` | Scale a controller | Read-modify-write: GET deployment, set `spec.replicas`, PUT | `UpdateService({ desiredCount: n })` |
+| `updateControllerReplicas(scope, name, n, metadata?, remove?)` | Scale a controller, removing the machines in `remove` first when scaling down | Read-modify-write: GET deployment, set `spec.replicas`, PUT. With `remove`, the pods get the lowest `pod-deletion-cost` first | `UpdateService({ desiredCount: n })`. With `remove`, the other tasks get the scale-in protection first (`GetTaskProtection`, `UpdateTaskProtection`) |
 | `deleteController(scope, name)` | Delete a controller | `DELETE` deployment | `DeleteService({ force: true })` |
 | `getServicesByLabels(scope, labels)` | Find network endpoints by labels | `GET /api/v1/.../services?labelSelector=...` | `GetResources` (tag filter) + `DescribeServices` |
 | `deleteService(scope, name)` | Delete a network endpoint | `DELETE` K8s Service | No-op (ECS Service = controller, already deleted by `deleteController`) |
@@ -138,7 +138,7 @@ PATCH  /:provider/machines/:scope/:id/labels        Set machine labels
 ```
 GET    /:provider/controllers/:scope?machineId=x    Find controller(s) for a machine
 GET    /:provider/controllers/:scope/:name           Get controller with machines
-POST   /:provider/controllers/:scope/:name           Scale replicas (body: { replicas })
+POST   /:provider/controllers/:scope/:name           Scale replicas (body: { replicas, remove? })
 DELETE /:provider/controllers/:scope/:name           Delete controller
 ```
 
@@ -214,6 +214,7 @@ The ECS provider communicates with AWS APIs using `@aws-sdk/client-ecs` and
 | Resources | Requests (guaranteed) + Limits (max) | Single value (no distinction) |
 | Service = networking | K8s Service is a separate networking resource | ECS Service IS the controller. `deleteService` is a no-op |
 | Replica update | Read-modify-write (GET, set replicas, PUT full object) | Single atomic call: `UpdateService({ desiredCount })` |
+| Choosing the machines removed | A preference: the lowest `controller.kubernetes.io/pod-deletion-cost`, for Deployments and ReplicaSets only, on the pods the controller owns. A pod which stays gets its previous cost back at the next change of the count. Requests which name machines for the same controller must come one at a time: machinist does not keep them apart | A guarantee while it lasts: the tasks to keep are protected from scale in for 5 minutes. Not steered when a task to remove is itself protected |
 | Tags | Unlimited labels | Max 50 tags per resource |
 
 ### How tag-based queries work
@@ -243,7 +244,14 @@ PLT_PROVIDER=ecs                          Provider selection
 PLT_ECS_REGION=us-east-1                  AWS region
 PLT_ECS_CLUSTER=my-cluster                ECS cluster name
 PLT_ECS_LISTENER_ARN=arn:aws:...          ALB listener for skew-protection routing (optional)
+PLT_ECS_SCALE_IN_PROTECTION=true          Protect the tasks to keep when a scale down names the machines to remove (optional)
 ```
+
+`PLT_ECS_SCALE_IN_PROTECTION` is on by default. Set it to `false` where the
+applications protect their own tasks from scale in: the protection of a task has
+a single expiry, set by whoever writes it last, so a task which protects itself
+for an hour while machinist protects it for five minutes can end up with the
+shorter one. With it off, a scale down which names machines is not steered.
 
 `PLT_ECS_LISTENER_ARN` is the shared ALB listener that skew-protection routing
 programs. It is provisioned outside machinist, by the deployment's own
@@ -260,6 +268,7 @@ which is the same situation as a Kubernetes cluster with no Gateway resource.
     "ecs:ListTasks", "ecs:DescribeTasks",
     "ecs:ListServices", "ecs:DescribeServices",
     "ecs:CreateService", "ecs:UpdateService", "ecs:DeleteService",
+    "ecs:GetTaskProtection", "ecs:UpdateTaskProtection",
     "ecs:RegisterTaskDefinition",
     "ecs:TagResource", "ecs:UntagResource",
     "ecs:ListTagsForResource",

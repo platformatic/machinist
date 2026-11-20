@@ -9,6 +9,8 @@ const {
   DescribeServicesCommand,
   ListServicesCommand,
   UpdateServiceCommand,
+  GetTaskProtectionCommand,
+  UpdateTaskProtectionCommand,
   DeleteServiceCommand,
   TagResourceCommand,
   RegisterTaskDefinitionCommand,
@@ -53,6 +55,13 @@ const albRules = require('../../lib/alb-rules')
 const { createHash } = require('node:crypto')
 const errors = require('../../errors')
 
+// How long the tasks to keep are protected from a scale in, see #protectFromRemoval(): long enough for the service to
+// choose the tasks it stops, and short, since a protected task also holds back a deployment
+const REMOVAL_PROTECTION_MINUTES = 5
+// UpdateTaskProtection takes at most 10 tasks, GetTaskProtection 100
+const PROTECTION_BATCH = 10
+const PROTECTION_READ_BATCH = 100
+
 const SCHEMA = {
   type: 'object',
   properties: {
@@ -84,7 +93,12 @@ const SCHEMA = {
     // Cloud Map namespace for handler addressing (ECS-SUPPORT.md D3). Without
     // it services are created without a registry and are only reachable via a
     // load balancer.
-    PLT_ECS_CLOUD_MAP_NAMESPACE_ID: { type: 'string' }
+    PLT_ECS_CLOUD_MAP_NAMESPACE_ID: { type: 'string' },
+    // Whether the tasks to keep get the scale-in protection when a scale down names the machines to remove, see
+    // #protectFromRemoval(). To turn off where the applications protect their own tasks: the protection of a task
+    // has one expiry, and the last writer sets it, so a task which protects itself for an hour while this provider
+    // protects it for a few minutes can end with the shorter one.
+    PLT_ECS_SCALE_IN_PROTECTION: { type: 'boolean', default: true }
   },
   required: ['PLT_ECS_REGION', 'PLT_ECS_CLUSTER']
 }
@@ -349,19 +363,148 @@ class Ecs {
     }
   }
 
-  async updateControllerReplicas (namespace, name, replicaCount) {
+  // remove is optional: the machines to remove first when the count is lowered. The answer then has `removal`, which
+  // tells whether the others were protected: the count is changed in any case.
+  async updateControllerReplicas (namespace, name, replicaCount, _providerMetadata, remove) {
+    const removal = Array.isArray(remove) && remove.length > 0
+      ? await this.#protectFromRemoval(namespace, name, replicaCount, remove)
+      : null
+
     const { service } = await this.ecsClient.send(new UpdateServiceCommand({
       cluster: namespace,
       service: name,
       desiredCount: replicaCount
     }))
 
-    return {
+    const controller = {
       name: service.serviceName,
       replicas: service.desiredCount,
       labels: this.#tagsToLabels(service.tags),
       providerMetadata: {}
     }
+
+    if (removal) {
+      controller.removal = removal
+    }
+
+    return controller
+  }
+
+  // ECS cannot be told which tasks to stop, only which ones not to: the tasks to keep get the scale-in protection for
+  // a few minutes, see https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-scale-in-protection.html, so
+  // that the service stops the others when its count is lowered.
+  //
+  // - Nothing is done unless the count goes below the desired one of the service: the tasks which run can be more,
+  //   during a rollout.
+  // - A task named which is protected is not stopped, whoever protected it: by its application, or here, for a scale
+  //   down a few minutes ago. Its protection is not cleared, since nothing tells whose it is, and the removal is not
+  //   steered.
+  // - No more tasks are protected than the new count, those already protected first: with fewer machines named than
+  //   the count goes down by, the service chooses the rest among those left unprotected.
+  // - A protection which already lasts as long is left as it is: setting it again would shorten the one a task gave
+  //   itself to finish its work.
+  //
+  // - A protection read as missing or short can be set by the task itself before it is written here, and the write
+  //   then shortens it: nothing in the API prevents it. PLT_ECS_SCALE_IN_PROTECTION turns the writes off for the
+  //   deployments whose applications protect their own tasks.
+  //
+  // Whatever fails here, i.e. a role without ecs:GetTaskProtection and ecs:UpdateTaskProtection, the count is changed
+  // all the same, and the answer says that the removal was not steered.
+  async #protectFromRemoval (namespace, name, replicaCount, remove) {
+    const machines = []
+
+    if (this.config.PLT_ECS_SCALE_IN_PROTECTION === false) {
+      return { steered: false, machines, reason: 'disabled' }
+    }
+
+    try {
+      const { services } = await this.ecsClient.send(new DescribeServicesCommand({ cluster: namespace, services: [name] }))
+
+      if (!(replicaCount < services?.[0]?.desiredCount)) {
+        return { steered: false, machines, reason: 'not-a-scale-down' }
+      }
+
+      const taskArns = await this.#listAllTaskArns(namespace, name)
+
+      // No more tasks than the new count, i.e. some did not start yet: the service reaches it without stopping any
+      if (taskArns.length <= replicaCount) {
+        return { steered: false, machines, reason: 'nothing-to-remove' }
+      }
+
+      const wanted = new Set(remove.map(machineId => this.#shortTaskId(machineId)))
+      const named = []
+      const keep = []
+
+      for (const taskArn of taskArns) {
+        const id = this.#shortTaskId(taskArn)
+
+        if (wanted.has(id)) {
+          machines.push(id)
+          named.push(taskArn)
+        } else {
+          keep.push(taskArn)
+        }
+      }
+
+      if (machines.length === 0) {
+        return { steered: false, machines, reason: 'machines-not-found' }
+      }
+
+      const now = Date.now()
+      const until = now + REMOVAL_PROTECTION_MINUTES * 60 * 1000
+      const protectedUntil = await this.#taskProtection(namespace, taskArns)
+
+      if (named.some(taskArn => protectedUntil.get(taskArn) > now)) {
+        return { steered: false, machines, reason: 'machines-protected' }
+      }
+
+      keep.sort((a, b) => (protectedUntil.get(b) ?? 0) - (protectedUntil.get(a) ?? 0))
+      const protect = keep.slice(0, replicaCount).filter(taskArn => !(protectedUntil.get(taskArn) >= until))
+
+      for (let i = 0; i < protect.length; i += PROTECTION_BATCH) {
+        const { failures } = await this.ecsClient.send(new UpdateTaskProtectionCommand({
+          cluster: namespace,
+          tasks: protect.slice(i, i + PROTECTION_BATCH),
+          protectionEnabled: true,
+          expiresInMinutes: REMOVAL_PROTECTION_MINUTES
+        }))
+
+        if (failures?.length > 0) {
+          this.log.warn({ failures, namespace, controller: name }, 'Unable to protect some tasks from the scale in')
+          return { steered: false, machines, reason: 'protection-failed' }
+        }
+      }
+    } catch (err) {
+      this.log.warn({ err, namespace, controller: name }, 'Unable to choose the tasks to remove first')
+      return { steered: false, machines: [], reason: 'failed' }
+    }
+
+    return { steered: true, machines }
+  }
+
+  // Until when each task is protected from a scale in, in milliseconds, by ARN: the tasks which are not protected are
+  // not in the map, and one protected with no expiry is protected forever
+  async #taskProtection (namespace, taskArns) {
+    const protectedUntil = new Map()
+
+    for (let i = 0; i < taskArns.length; i += PROTECTION_READ_BATCH) {
+      const { protectedTasks, failures } = await this.ecsClient.send(new GetTaskProtectionCommand({
+        cluster: namespace,
+        tasks: taskArns.slice(i, i + PROTECTION_READ_BATCH)
+      }))
+
+      if (failures?.length > 0) {
+        throw new Error(`Cannot read the protection of the tasks: ${failures[0].reason}`)
+      }
+
+      for (const task of protectedTasks ?? []) {
+        if (task.protectionEnabled) {
+          protectedUntil.set(task.taskArn, task.expirationDate ? new Date(task.expirationDate).getTime() : Infinity)
+        }
+      }
+    }
+
+    return protectedUntil
   }
 
   async deleteController (namespace, name) {

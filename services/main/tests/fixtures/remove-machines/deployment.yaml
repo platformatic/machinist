@@ -1,0 +1,24 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remove-machines-deployment
+  namespace: default
+  labels:
+    app.kubernetes.io/instance: remove-machines-fixture
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: remove-machines-fixture
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: remove-machines-fixture
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        # The pause image k3s already has: the pods only have to run
+        - name: pause
+          image: rancher/mirrored-pause:3.6
+          imagePullPolicy: IfNotPresent

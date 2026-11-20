@@ -19,6 +19,101 @@ const SCHEMA = {
   }
 }
 
+// The ReplicaSet controller removes first the pods with the lowest deletion cost, among those which run: see
+// https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/#pod-deletion-cost. It is a preference, not a
+// guarantee, and only the controllers which scale through a ReplicaSet follow it.
+const DELETION_COST_ANNOTATION = 'controller.kubernetes.io/pod-deletion-cost'
+const LOWEST_DELETION_COST = '-2147483648'
+// Marks the pods whose deletion cost was set here, so that it is cleared from those which were not removed
+const REMOVE_FIRST_ANNOTATION = 'machinist.platformatic.dev/remove-first'
+// The deletion cost a marked pod had before, when it had one
+const PREVIOUS_COST_ANNOTATION = 'machinist.platformatic.dev/previous-deletion-cost'
+// On the controller, while some of its pods can be marked: a change of the count which names no machine then takes
+// the marks back first, and one of a controller which never had any costs nothing more than before.
+//
+// Two requests which name machines for the same controller at once are not kept apart here: each edits the pods, and
+// they can undo each other. Whoever names machines, i.e. ICC, sends one such request at a time for a controller.
+const MARKED_PODS_ANNOTATION = 'machinist.platformatic.dev/remove-first-pods'
+// A pod changed by somebody else while it is being marked or unmarked is read again, this many times
+const ANNOTATE_ATTEMPTS = 3
+// And so is the controller, when a write of it is refused
+const WRITE_ATTEMPTS = 5
+const STEERABLE_KINDS = ['Deployment', 'ReplicaSet']
+
+// Whether a pod is controlled by one of the owners, by UID
+function ownedBy (pod, owners) {
+  return pod.metadata?.ownerReferences?.some(owner => owner.controller && owners.has(owner.uid)) === true
+}
+
+// What to write on a pod, as the annotations of a patch or null when it is as it should be, and whether the pod is
+// then preferred for removal.
+//
+// - To remove: it gets the lowest cost and the mark, and the cost it had is kept aside. Marked already, it is preferred
+//   only while its cost is still the lowest: one changed since belongs to whoever changed it, the pod is not
+//   preferred, and the mark is dropped.
+// - Not to remove, and marked: the mark is dropped, and the cost it had is given back, unless it was changed since.
+function removalPatch (pod, wanted) {
+  const annotations = pod.metadata?.annotations ?? {}
+  const marked = annotations[REMOVE_FIRST_ANNOTATION] === 'true'
+  const cost = annotations[DELETION_COST_ANNOTATION]
+  const unmark = { [REMOVE_FIRST_ANNOTATION]: null, [PREVIOUS_COST_ANNOTATION]: null }
+
+  if (!wanted) {
+    if (!marked) {
+      return { patch: null, preferred: false }
+    }
+
+    if (cost === LOWEST_DELETION_COST) {
+      unmark[DELETION_COST_ANNOTATION] = annotations[PREVIOUS_COST_ANNOTATION] ?? null
+    }
+
+    return { patch: unmark, preferred: false }
+  }
+
+  // A pod which is terminating is on its way out already
+  if (pod.metadata?.deletionTimestamp) {
+    return { patch: null, preferred: false }
+  }
+
+  if (marked) {
+    return cost === LOWEST_DELETION_COST ? { patch: null, preferred: true } : { patch: unmark, preferred: false }
+  }
+
+  const mark = { [DELETION_COST_ANNOTATION]: LOWEST_DELETION_COST, [REMOVE_FIRST_ANNOTATION]: 'true' }
+
+  if (cost !== undefined) {
+    mark[PREVIOUS_COST_ANNOTATION] = cost
+  }
+
+  return { patch: mark, preferred: true }
+}
+
+// The selector of a controller as the labelSelector of a list, with its expressions: the labels alone can match the
+// pods of another controller. Empty without a selector, or with an operator which is not known.
+function labelSelectorOf (selector) {
+  const parts = []
+
+  for (const [key, value] of Object.entries(selector?.matchLabels ?? {})) {
+    parts.push(`${key}=${value}`)
+  }
+
+  for (const { key, operator, values = [] } of selector?.matchExpressions ?? []) {
+    if (operator === 'In') {
+      parts.push(`${key} in (${values.join(',')})`)
+    } else if (operator === 'NotIn') {
+      parts.push(`${key} notin (${values.join(',')})`)
+    } else if (operator === 'Exists') {
+      parts.push(key)
+    } else if (operator === 'DoesNotExist') {
+      parts.push(`!${key}`)
+    } else {
+      return ''
+    }
+  }
+
+  return parts.join(',')
+}
+
 class K8s {
   constructor ({ config, log, caContent, tokenPath, authType, clientCreds }) {
     this.log = log
@@ -133,25 +228,213 @@ class K8s {
     }
   }
 
-  async updateControllerReplicas (namespace, name, replicaCount, providerMetadata) {
+  // remove is optional: the machines to remove first when the count is lowered. The answer then has `removal`, which
+  // tells whether the preference was set: the count is changed in any case.
+  async updateControllerReplicas (namespace, name, replicaCount, providerMetadata, remove) {
     const { kind, apiVersion } = this.#requireCoordinates(providerMetadata)
-    const raw = await this.#getRawController(namespace, name, apiVersion, kind)
-
-    raw.spec.replicas = replicaCount
-
     const controllerPath = this.#createControllerPath(namespace, name, apiVersion, kind)
-    const updated = await this.apiClient.request(controllerPath, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(raw)
-    })
+    // The controller as it was last read or written, and whether its pods were looked at, see #preferRemoval()
+    const state = { raw: await this.#getRawController(namespace, name, apiVersion, kind), looked: false, marked: false }
+    const named = Array.isArray(remove) && remove.length > 0
+    let removal = null
 
-    return {
+    if (named) {
+      removal = await this.#preferRemoval(namespace, state, kind, replicaCount, remove, controllerPath)
+    } else if (state.raw.metadata?.annotations?.[MARKED_PODS_ANNOTATION] === 'true' && replicaCount !== state.raw.spec?.replicas) {
+      // The pods an earlier request marked and which are still there must not be the ones this change removes. Not
+      // when the count stays as it is: the controller can still be choosing the pod to remove for that request, and
+      // the marks are what it chooses by.
+      await this.#preferRemoval(namespace, state, kind, replicaCount, [], controllerPath)
+    }
+
+    let updated
+
+    if (state.looked) {
+      // Looking at the pods took time, in which the controller can have been deployed again: only the count and the
+      // mark are written, and never the controller as it was read, which would bring its old pods back
+      updated = await this.#patchController(controllerPath, state.raw, {
+        metadata: { annotations: { [MARKED_PODS_ANNOTATION]: state.marked ? 'true' : null } },
+        spec: { replicas: replicaCount }
+      })
+    } else {
+      state.raw.spec.replicas = replicaCount
+      updated = await this.apiClient.request(controllerPath, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state.raw)
+      })
+    }
+
+    const controller = {
       name: updated.metadata?.name,
       replicas: updated.spec?.replicas,
       labels: updated.metadata?.labels ?? {},
       providerMetadata: { kind, apiVersion }
     }
+
+    if (removal) {
+      controller.removal = removal
+    }
+
+    return controller
+  }
+
+  // Writes some fields of a controller, on the version of it which was read. Kubernetes writes the controller often,
+  // with its status, and the write is then refused: it is made again on the controller read again, as long as it is
+  // the same one, by UID, with the count the decision was taken on. One deleted and created again under the same
+  // name, or scaled by somebody else meanwhile, is not written: the refusal goes to the caller.
+  async #patchController (controllerPath, raw, patch) {
+    let current = raw
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.apiClient.request(controllerPath, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/merge-patch+json' },
+          body: JSON.stringify({ ...patch, metadata: { ...patch.metadata, resourceVersion: current.metadata.resourceVersion } })
+        })
+      } catch (err) {
+        if (err.statusCode !== 409 || attempt >= WRITE_ATTEMPTS - 1) {
+          throw err
+        }
+
+        current = await this.apiClient.request(controllerPath)
+
+        // Scaled by somebody else, even to the count this write asks for, Kubernetes can have chosen the pods to
+        // remove before those of this request were marked
+        if (current.metadata?.uid !== raw.metadata?.uid || current.spec?.replicas !== raw.spec?.replicas) {
+          throw err
+        }
+      }
+    }
+  }
+
+  // Gives the lowest deletion cost to the pods to remove first, before the count of their controller is lowered, and
+  // takes it back from the pods marked by an earlier request which are still there, i.e. were not removed: they would
+  // otherwise be preferred at the next scale down. With no pod to remove, it only takes the marks back. Only the pods
+  // the controller owns are touched: two controllers can select pods with the same labels, and a pod of the other
+  // one, with its mark, is left alone. Whatever fails here, the count is changed all the same, and the answer says
+  // that the removal was not steered.
+  //
+  // state.raw is the controller, replaced here when it is written; state.looked tells that the pods were looked at,
+  // so that the count is then written with #patchController(); state.marked whether some pods can be marked after it.
+  async #preferRemoval (namespace, state, kind, replicaCount, remove, controllerPath) {
+    let raw = state.raw
+
+    if (remove.length > 0 && !(replicaCount < raw.spec?.replicas)) {
+      return { steered: false, machines: [], reason: 'not-a-scale-down' }
+    }
+
+    if (!STEERABLE_KINDS.includes(kind)) {
+      return { steered: false, machines: [], reason: 'unsupported-controller' }
+    }
+
+    const labelSelector = labelSelectorOf(raw.spec?.selector)
+
+    // Without a selector the list would be every pod of the namespace
+    if (!labelSelector) {
+      return { steered: false, machines: [], reason: 'no-selector' }
+    }
+
+    const machines = []
+
+    // The controller remembers that some of its pods can be marked before any is: if the count cannot be written
+    // afterwards, the marks are still found, and taken back, by a later change of the count
+    try {
+      state.marked = raw.metadata?.annotations?.[MARKED_PODS_ANNOTATION] === 'true'
+
+      if (remove.length > 0 && !state.marked) {
+        raw = state.raw = await this.#patchController(controllerPath, raw, { metadata: { annotations: { [MARKED_PODS_ANNOTATION]: 'true' } } })
+        state.marked = true
+      }
+
+      state.looked = true
+    } catch (err) {
+      this.log.warn({ err, namespace, controller: raw.metadata?.name }, 'Unable to choose the pods to remove first')
+      return { steered: false, machines: [], reason: 'failed' }
+    }
+
+    try {
+      const query = `labelSelector=${encodeURIComponent(labelSelector)}`
+      const owners = await this.#podOwners(namespace, raw, kind, query)
+      const { items } = await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods?${query}`)
+
+      for (const pod of items ?? []) {
+        if (!ownedBy(pod, owners)) {
+          continue
+        }
+
+        if (await this.#markPod(namespace, pod, remove.includes(pod.metadata.name), owners)) {
+          machines.push(pod.metadata.name)
+        }
+      }
+    } catch (err) {
+      this.log.warn({ err, namespace, controller: raw.metadata?.name }, 'Unable to choose the pods to remove first')
+      return { steered: false, machines: [], reason: 'failed' }
+    }
+
+    // With no pod marked anymore, the controller forgets it, with the count
+    state.marked = machines.length > 0
+
+    return machines.length > 0 ? { steered: true, machines } : { steered: false, machines, reason: 'machines-not-found' }
+  }
+
+  // Marks a pod to remove first, or takes the mark back from one which is not to remove anymore. Returns whether the
+  // pod is preferred, i.e. is to remove and has the lowest deletion cost. The pod is written as it was read, with its
+  // resourceVersion: one changed meanwhile is read again and decided again, so that a cost somebody else just set is
+  // neither overwritten nor kept aside in place of the right one. Read again, it must still be the same pod, owned
+  // by the controller: one which was replaced, orphaned or adopted meanwhile is left alone.
+  async #markPod (namespace, pod, wanted, owners) {
+    const uid = pod.metadata.uid
+
+    for (let attempt = 0; ; attempt++) {
+      const { patch, preferred } = removalPatch(pod, wanted)
+
+      if (!patch) {
+        return preferred
+      }
+
+      try {
+        await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods/${pod.metadata.name}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/strategic-merge-patch+json' },
+          body: JSON.stringify({ metadata: { resourceVersion: pod.metadata.resourceVersion, annotations: patch } })
+        })
+
+        return preferred
+      } catch (err) {
+        if (err.statusCode !== 409 || attempt >= ANNOTATE_ATTEMPTS - 1) {
+          throw err
+        }
+
+        pod = await this.apiClient.request(`/api/v1/namespaces/${namespace}/pods/${pod.metadata.name}`)
+
+        if (pod.metadata?.uid !== uid || !ownedBy(pod, owners)) {
+          return false
+        }
+      }
+    }
+  }
+
+  // The UIDs of the controllers which own the pods of a controller directly: the ReplicaSet itself, or the
+  // ReplicaSets of a Deployment
+  async #podOwners (namespace, raw, kind, query) {
+    const uid = raw.metadata?.uid
+
+    if (kind === 'ReplicaSet') {
+      return new Set(uid ? [uid] : [])
+    }
+
+    const owners = new Set()
+    const { items } = await this.apiClient.request(`/apis/apps/v1/namespaces/${namespace}/replicasets?${query}`)
+
+    for (const replicaSet of items ?? []) {
+      if (uid && replicaSet.metadata?.ownerReferences?.some(owner => owner.controller && owner.uid === uid)) {
+        owners.add(replicaSet.metadata.uid)
+      }
+    }
+
+    return owners
   }
 
   async deleteController (namespace, name, providerMetadata) {
