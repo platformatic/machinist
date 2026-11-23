@@ -287,7 +287,10 @@ class Ecs {
     for (const { targetGroupArn, containerPort } of service?.loadBalancers ?? []) {
       if (!containerPort) continue
 
-      const listenerPorts = targetGroupArn ? await this.#getTargetGroupListenerPorts(targetGroupArn) : []
+      let listenerPorts = []
+      if (targetGroupArn) {
+        listenerPorts = await this.#getTargetGroupListenerPorts(targetGroupArn)
+      }
       if (listenerPorts.length === 0) {
         ports.push({ port: null, targetPort: containerPort })
       }

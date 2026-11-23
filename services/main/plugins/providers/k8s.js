@@ -171,7 +171,10 @@ class K8s {
       if (!selectorLabels.every(([key, value]) => podLabels[key] === value)) continue
 
       for (const { port, targetPort = port } of service.spec?.ports ?? []) {
-        const containerPort = typeof targetPort === 'string' ? containerPortsByName.get(targetPort) : targetPort
+        let containerPort = targetPort
+        if (typeof targetPort === 'string') {
+          containerPort = containerPortsByName.get(targetPort)
+        }
         if (containerPort) {
           ports.push({ port, targetPort: containerPort })
         }
