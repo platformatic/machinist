@@ -19,6 +19,44 @@ module.exports = async function routes (fastify) {
     return fastify.provider.getMachine(namespace, id)
   })
 
+  // The ports traffic reaches the machine on (Kubernetes Services, ECS load balancer listeners / Cloud Map), each
+  // with the container port it is forwarded to. `port` is null when only the container port is known (an ECS task
+  // definition). The application listening on a `targetPort` is the one reachable from outside.
+  fastify.get('/machines/:namespace/:id/ports', {
+    schema: {
+      params: {
+        type: 'object',
+        properties: {
+          namespace: { $ref: 'machinist#/definitions/namespace' },
+          id: { $ref: 'machinist#/definitions/machineId' }
+        }
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            ports: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  port: { type: ['integer', 'null'] },
+                  targetPort: { type: 'integer' }
+                },
+                required: ['port', 'targetPort']
+              }
+            }
+          },
+          required: ['ports']
+        }
+      }
+    }
+  }, async (request) => {
+    const { namespace, id } = request.params
+    const ports = await fastify.provider.getMachinePorts(namespace, id)
+    return { ports }
+  })
+
   fastify.get('/machines/:namespace', {
     schema: {
       params: {
