@@ -149,6 +149,41 @@ class K8s {
     return this.#formatMachine(pod)
   }
 
+  async getMachinePorts (namespace, machineId) {
+    const [pod, { items: services }] = await Promise.all([
+      this.apiClient.request(`/api/v1/namespaces/${namespace}/pods/${machineId}`),
+      this.apiClient.request(`/api/v1/namespaces/${namespace}/services`)
+    ])
+
+    const podLabels = pod.metadata?.labels ?? {}
+    const containerPortsByName = new Map()
+    for (const container of pod.spec?.containers ?? []) {
+      for (const { name, containerPort } of container.ports ?? []) {
+        if (name) containerPortsByName.set(name, containerPort)
+      }
+    }
+
+    const ports = []
+    for (const service of services) {
+      // A Service without a selector has its endpoints managed by hand: it selects no pod
+      const selectorLabels = Object.entries(service.spec?.selector ?? {})
+      if (selectorLabels.length === 0) continue
+      if (!selectorLabels.every(([key, value]) => podLabels[key] === value)) continue
+
+      for (const { port, targetPort = port } of service.spec?.ports ?? []) {
+        let containerPort = targetPort
+        if (typeof targetPort === 'string') {
+          containerPort = containerPortsByName.get(targetPort)
+        }
+        if (containerPort) {
+          ports.push({ port, targetPort: containerPort })
+        }
+      }
+    }
+
+    return ports
+  }
+
   async getMachines (namespace, labels = {}) {
     // k8s labelSelector is comma-separated. querystring.stringify joins with `&`,
     // which splits every label after the first off into ignored query params, so

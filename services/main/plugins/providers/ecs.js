@@ -256,6 +256,96 @@ class Ecs {
     return this.#formatMachine(tasks[0], serviceLabels.get(this.#serviceNameOf(tasks[0])))
   }
 
+  // The ports traffic reaches the task on, each with the container port it is forwarded to (`targetPort`): the
+  // listeners of the service's load balancers, else its Cloud Map registries. A task outside a service, or one whose
+  // service has neither, has only the container ports of its task definition, with no `port`.
+  async getMachinePorts (namespace, machineId) {
+    const { tasks, failures } = await this.ecsClient.send(new DescribeTasksCommand({
+      cluster: namespace,
+      tasks: [machineId]
+    }))
+
+    if (failures?.length > 0 || !tasks?.length) {
+      const reason = failures?.[0]?.reason || 'Task not found'
+      const err = new Error(`Task not found: ${machineId} — ${reason}`)
+      err.statusCode = 404
+      throw err
+    }
+
+    const task = tasks[0]
+    let service = null
+    const serviceName = this.#serviceNameOf(task)
+    if (serviceName) {
+      const { services } = await this.ecsClient.send(new DescribeServicesCommand({
+        cluster: namespace,
+        services: [serviceName]
+      }))
+      service = services?.[0] ?? null
+    }
+
+    const ports = []
+    for (const { targetGroupArn, containerPort } of service?.loadBalancers ?? []) {
+      if (!containerPort) continue
+
+      let listenerPorts = []
+      if (targetGroupArn) {
+        listenerPorts = await this.#getTargetGroupListenerPorts(targetGroupArn)
+      }
+      if (listenerPorts.length === 0) {
+        ports.push({ port: null, targetPort: containerPort })
+      }
+      for (const listenerPort of listenerPorts) {
+        ports.push({ port: listenerPort, targetPort: containerPort })
+      }
+    }
+
+    if (ports.length === 0) {
+      for (const { port, containerPort } of service?.serviceRegistries ?? []) {
+        const registryPort = port ?? null
+        const targetPort = containerPort ?? registryPort
+        if (targetPort) {
+          ports.push({ port: registryPort, targetPort })
+        }
+      }
+    }
+
+    if (ports.length === 0) {
+      const taskDefinitionArn = service?.taskDefinition ?? task.taskDefinitionArn
+      const containerPorts = await this.#containerPortsOf(taskDefinitionArn)
+      for (const containerPort of containerPorts) {
+        ports.push({ port: null, targetPort: containerPort })
+      }
+    }
+
+    return ports
+  }
+
+  // The ports of the load balancer listeners forwarding to the target group, by their default action or a rule
+  async #getTargetGroupListenerPorts (targetGroupArn) {
+    const { TargetGroups } = await this.elbClient.send(new DescribeTargetGroupsCommand({
+      TargetGroupArns: [targetGroupArn]
+    }))
+
+    const listenerPorts = []
+    for (const loadBalancerArn of TargetGroups?.[0]?.LoadBalancerArns ?? []) {
+      const { Listeners } = await this.elbClient.send(new DescribeListenersCommand({
+        LoadBalancerArn: loadBalancerArn
+      }))
+
+      for (const listener of Listeners ?? []) {
+        let isForwardingToTargetGroup = this.#ruleTargets({ Actions: listener.DefaultActions }, targetGroupArn)
+        if (!isForwardingToTargetGroup) {
+          const { Rules } = await this.elbClient.send(new DescribeRulesCommand({
+            ListenerArn: listener.ListenerArn
+          }))
+          isForwardingToTargetGroup = (Rules ?? []).some(rule => this.#ruleTargets(rule, targetGroupArn))
+        }
+        if (isForwardingToTargetGroup) listenerPorts.push(listener.Port)
+      }
+    }
+    return listenerPorts
+  }
+
   async getMachines (namespace, labels = {}) {
     const hasLabels = Object.keys(labels).length > 0
 
